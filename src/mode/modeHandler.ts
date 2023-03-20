@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as vscodelc from 'vscode-languageclient/node';
 
 import { BaseAction, KeypressState, BaseCommand, getRelevantAction } from './../actions/base';
 import { BaseMovement } from '../actions/baseMotion';
@@ -47,52 +46,7 @@ import { Position, Uri } from 'vscode';
 import { RemapState } from '../state/remapState';
 import * as process from 'process';
 import { EasyMotion } from '../actions/plugins/easymotion/easymotion';
-
-/**
- * Clang.
- */
-
-import { ASTParams, ASTNode } from '../clangd/ast';
-import { ClangdContext } from 'src/clangd/clangd-context';
-
-declare global {
-  var clangContext: ClangdContext;
-}
-
-const ASTRequestType = new vscodelc.RequestType<ASTParams, ASTNode | null, void>(
-  'textDocument/ast'
-);
-
-const decorationType = vscode.window.createTextEditorDecorationType({
-  backgroundColor: 'yellow',
-  textDecoration: 'underline',
-});
-
-const highlightAstNode = async (): Promise<ASTNode | null> => {
-  const editor = vscode.window.activeTextEditor;
-  const offset = editor!.selection.active;
-  const converter = clangContext.client.code2ProtocolConverter;
-  const item = await clangContext.client.sendRequest(ASTRequestType, {
-    textDocument: converter.asTextDocumentIdentifier(editor!.document),
-    range: converter.asRange(new vscode.Range(offset, offset.getRight())),
-  });
-  if (!item) {
-    vscode.window.showInformationMessage('No AST node at selection');
-  } else {
-    // TODO: figure out whether there is a simpler way to convert a vscodelc.Positition to a vscode.Position.
-    // TODO: figure out whether exclamation marks are the right way to go here.
-    const start = new vscode.Position(item.range!.start.line, item.range!.start.character);
-    const end = new vscode.Position(item.range!.end.line, item.range!.end.character);
-    const range = new vscode.Range(start, end);
-
-    // Define the decoration options for the range
-    const astDecoration = { range };
-
-    // Apply the decoration style to the range
-    editor!.setDecorations(decorationType, [astDecoration]);
-  }
-  return item;
-};
+import { highlightAstNode } from '../clangd/editor-services';
 
 interface IModeHandlerMap {
   get(editorId: Uri): ModeHandler | undefined;
