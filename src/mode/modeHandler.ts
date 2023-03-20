@@ -68,7 +68,7 @@ const decorationType = vscode.window.createTextEditorDecorationType({
   textDecoration: 'underline',
 });
 
-const astHighlight = async () => {
+const highlightAstNode = async (): Promise<ASTNode | null> => {
   const editor = vscode.window.activeTextEditor;
   const offset = editor!.selection.active;
   const converter = clangContext.client.code2ProtocolConverter;
@@ -91,6 +91,7 @@ const astHighlight = async () => {
     // Apply the decoration style to the range
     editor!.setDecorations(decorationType, [astDecoration]);
   }
+  return item;
 };
 
 interface IModeHandlerMap {
@@ -740,7 +741,7 @@ export class ModeHandler implements vscode.Disposable, IModeHandler {
 
     // Update view
     await this.updateView();
-    astHighlight();
+    this.vimState.currentAstNode = await highlightAstNode();
 
     if (action.isJump) {
       globalState.jumpTracker.recordJump(

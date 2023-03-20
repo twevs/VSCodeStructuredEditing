@@ -17,6 +17,7 @@ import { ExCommandLine, SearchCommandLine } from '../cmd_line/commandLine';
 import { ModeData } from '../mode/modeData';
 import { SearchDirection } from '../vimscript/pattern';
 import { globalState } from './globalState';
+import { ASTNode } from '../clangd/ast'
 
 interface IInputMethodSwitcher {
   switchInputMethod(prevMode: Mode, newMode: Mode): Promise<void>;
@@ -327,6 +328,8 @@ export class VimState implements vscode.Disposable {
       this.inputMethodSwitcher = new ime.InputMethodSwitcher();
     }
   }
+
+  public currentAstNode: ASTNode | null = null;
 
   dispose() {
     this.nvim?.dispose();
