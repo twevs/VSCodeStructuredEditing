@@ -10,6 +10,11 @@
     "no-return-await": true,
     "no-switch-case-fall-through": true,
     "no-unnecessary-type-assertion": true,
-    "prefer-const": { "options": { "destructuring": "all" } }
+    "prefer-const": { "options": { "destructuring": "all" } },
+    "no-empty": false,
+    "only-arrow-functions": false
+  },
+  "linterOptions": {
+    "exclude": ["src/clangd/*"]
   }
 }

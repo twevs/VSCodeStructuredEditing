@@ -287,10 +287,11 @@ class MoveDownFoldFix extends MoveByScreenLineMaintainDesiredColumn {
 
 @RegisterAction
 class MoveDown extends BaseMovement {
-  keys = [['j'], ['<down>'], ['<C-j>'], ['<C-n>']];
+  keys = [['<down>'], ['<C-j>'], ['<C-n>']];
   override preservesDesiredColumn = true;
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
+    let newPosition;
     if (
       vimState.currentMode === Mode.Insert &&
       this.keysPressed[0] === '<down>' &&
@@ -300,18 +301,20 @@ class MoveDown extends BaseMovement {
     ) {
       // navigate history in interactive window
       await vscode.commands.executeCommand('interactive.history.next');
-      return vimState.editor.selection.active;
+      newPosition = vimState.editor.selection.active;
     }
 
     if (configuration.foldfix && vimState.currentMode !== Mode.VisualBlock) {
-      return new MoveDownFoldFix().execAction(position, vimState);
+      newPosition = new MoveDownFoldFix().execAction(position, vimState);
     }
 
     if (position.line < vimState.document.lineCount - 1) {
-      return position.with({ character: vimState.desiredColumn }).getDown();
+      newPosition = position.with({ character: vimState.desiredColumn }).getDown();
     } else {
-      return position;
+      newPosition = position;
     }
+
+    return newPosition;
   }
 
   public override async execActionForOperator(
@@ -325,10 +328,11 @@ class MoveDown extends BaseMovement {
 
 @RegisterAction
 class MoveUp extends BaseMovement {
-  keys = [['k'], ['<up>'], ['<C-p>']];
+  keys = [['<up>'], ['<C-p>']];
   override preservesDesiredColumn = true;
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
+    let newPosition;
     if (
       vimState.currentMode === Mode.Insert &&
       this.keysPressed[0] === '<up>' &&
@@ -338,18 +342,20 @@ class MoveUp extends BaseMovement {
     ) {
       // navigate history in interactive window
       await vscode.commands.executeCommand('interactive.history.previous');
-      return vimState.editor.selection.active;
+      newPosition = vimState.editor.selection.active;
     }
 
     if (configuration.foldfix && vimState.currentMode !== Mode.VisualBlock) {
-      return new MoveUpFoldFix().execAction(position, vimState);
+      newPosition = new MoveUpFoldFix().execAction(position, vimState);
     }
 
     if (position.line > 0) {
-      return position.with({ character: vimState.desiredColumn }).getUp();
+      newPosition = position.with({ character: vimState.desiredColumn }).getUp();
     } else {
-      return position;
+      newPosition = position;
     }
+
+    return newPosition;
   }
 
   public override async execActionForOperator(
@@ -695,57 +701,63 @@ async function ensureEditorIsActive(document: vscode.TextDocument) {
 
 @RegisterAction
 class MoveLeft extends BaseMovement {
-  keys = [['h'], ['<left>'], ['<BS>'], ['<C-BS>'], ['<S-BS>']];
+  keys = [['<left>'], ['<BS>'], ['<C-BS>'], ['<S-BS>']];
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     const getLeftWhile = (p: Position): Position => {
       const line = vimState.document.lineAt(p.line).text;
-      const newPosition = p.getLeft();
-      if (newPosition.character === 0) {
-        return newPosition;
+      const leftPosition = p.getLeft();
+      if (leftPosition.character === 0) {
+        return leftPosition;
       }
+
       if (
-        isLowSurrogate(line.charCodeAt(newPosition.character)) &&
-        isHighSurrogate(line.charCodeAt(newPosition.character - 1))
+        isLowSurrogate(line.charCodeAt(leftPosition.character)) &&
+        isHighSurrogate(line.charCodeAt(leftPosition.character - 1))
       ) {
-        return newPosition.getLeft();
+        return leftPosition.getLeft();
       } else {
-        return newPosition;
+        return leftPosition;
       }
     };
-    return shouldWrapKey(vimState.currentMode, this.keysPressed[0])
+
+    const newPosition = shouldWrapKey(vimState.currentMode, this.keysPressed[0])
       ? position.getLeftThroughLineBreaks(
           [Mode.Insert, Mode.Replace].includes(vimState.currentMode)
         )
       : getLeftWhile(position);
+    return newPosition;
   }
 }
 
 @RegisterAction
 class MoveRight extends BaseMovement {
-  keys = [['l'], ['<right>'], [' ']];
+  keys = [['<right>'], [' ']];
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     const getRightWhile = (p: Position): Position => {
       const line = vimState.document.lineAt(p.line).text;
-      const newPosition = p.getRight();
-      if (newPosition.character >= vimState.document.lineAt(newPosition.line).text.length) {
-        return newPosition;
+      const rightPosition = p.getRight();
+      if (rightPosition.character >= vimState.document.lineAt(rightPosition.line).text.length) {
+        return rightPosition;
       }
+
       if (
-        isLowSurrogate(line.charCodeAt(newPosition.character)) &&
+        isLowSurrogate(line.charCodeAt(rightPosition.character)) &&
         isHighSurrogate(line.charCodeAt(p.character))
       ) {
-        return newPosition.getRight();
+        return rightPosition.getRight();
       } else {
-        return newPosition;
+        return rightPosition;
       }
     };
-    return shouldWrapKey(vimState.currentMode, this.keysPressed[0])
+
+    const newPosition = shouldWrapKey(vimState.currentMode, this.keysPressed[0])
       ? position.getRightThroughLineBreaks(
           [Mode.Insert, Mode.Replace].includes(vimState.currentMode)
         )
       : getRightWhile(position);
+    return newPosition;
   }
 }
 
@@ -1484,7 +1496,7 @@ export class MoveFullWordBegin extends BaseMovement {
 
 @RegisterAction
 class MoveWordEnd extends BaseMovement {
-  keys = ['e'];
+  keys = []; // NOTE (Thomas): deleted.
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     return position.nextWordEnd(vimState.document);

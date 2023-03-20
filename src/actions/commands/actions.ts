@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as vscodelc from 'vscode-languageclient';
 
 import { RecordedState } from '../../state/recordedState';
 import { VimState } from '../../state/vimState';
@@ -34,6 +35,8 @@ import { shouldWrapKey } from '../wrapping';
 import { ErrorCode, VimError } from '../../error';
 import { SearchDirection } from '../../vimscript/pattern';
 import { doesFileExist } from 'platform/fs';
+import { areEqual, getParentAstNode, highlightAstNode } from '../../clangd/structural-editing';
+import { ASTNode } from 'src/clangd/ast';
 
 /**
  * A very special snowflake.
@@ -1344,7 +1347,7 @@ class CommandTabPrevious extends BaseCommand {
 @RegisterAction
 export class ActionDeleteChar extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['x'];
+  keys = []; // NOTE (Thomas): deleted.
   override name = 'delete_char';
   override createsUndoPoint = true;
 
@@ -2199,7 +2202,7 @@ class ActionChangeLineVisualBlockMode extends BaseCommand {
 @RegisterAction
 class ActionChangeChar extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['s'];
+  keys = []; // NOTE (Thomas): deleted.
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     await new operator.ChangeOperator(this.multicursorIndex).run(
@@ -2672,5 +2675,300 @@ class ShowFileOutline extends BaseCommand {
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     await vscode.commands.executeCommand('outline.focus');
+  }
+}
+
+/**
+ * Clangd.
+ */
+
+function getRangeWithSemiColon(range: vscode.Range): vscode.Range {
+  const document = vscode.window.activeTextEditor!.document;
+  const start = range.start;
+  let end = range.end;
+  const text = document.lineAt(range.end.line).text;
+  if (text.charAt(end.character) === ';') {
+    end = new vscode.Position(range.end.line, range.end.character + 1);
+  }
+  return new vscode.Range(start, end);
+}
+
+function getEntireNodeRange(range: vscode.Range): vscode.Range {
+  const document = vscode.window.activeTextEditor!.document;
+  const start = range.start;
+  let end = range.end;
+  const text = document.lineAt(range.end.line).text;
+  if (text.length === end.character || text.charAt(end.character) === ';') {
+    end = new vscode.Position(range.end.line, range.end.character + 1);
+  }
+  return new vscode.Range(start, end);
+}
+
+@RegisterAction
+class DeleteAstNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['x'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    if (!vimState.currentAstNode) {
+      return;
+    }
+    let astNodeRange = globalThis.clangContext.client.protocol2CodeConverter.asRange(
+      vimState.currentAstNode.range!
+    );
+    astNodeRange = getRangeWithSemiColon(astNodeRange);
+    let entireNodeRange = getEntireNodeRange(astNodeRange);
+
+    const document = vscode.window.activeTextEditor!.document;
+    if (
+      document.lineAt(entireNodeRange.start.line).firstNonWhitespaceCharacterIndex ===
+      entireNodeRange.start.character
+    ) {
+      entireNodeRange = new vscode.Range(
+        entireNodeRange.start.getUp().getLineEndIncludingEOL(),
+        entireNodeRange.end
+      );
+    }
+
+    vimState.recordedState.transformer.addTransformation({
+      type: 'deleteRange',
+      range: entireNodeRange,
+      manuallySetCursorPositions: true,
+    });
+  }
+}
+
+@RegisterAction
+class ReplaceParentAstNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['s'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const currentNode = vimState.currentAstNode;
+    if (!currentNode) {
+      return;
+    }
+    let parent = await getParentAstNode(currentNode, vimState);
+    if (!parent) {
+      return;
+    }
+    if (parent.kind === 'Compound') {
+      const grandParent = await getParentAstNode(parent, vimState);
+      if (grandParent?.kind !== 'Compound') {
+        parent = grandParent ?? parent;
+      }
+    }
+
+    const converter = globalThis.clangContext.client.protocol2CodeConverter;
+    const astNodeRange = getEntireNodeRange(
+      getRangeWithSemiColon(converter.asRange(currentNode.range!))
+    );
+    const astNodeText = vscode.window.activeTextEditor!.document.getText(astNodeRange);
+    vimState.recordedState.transformer.addTransformation({
+      type: 'replaceText',
+      range: converter.asRange(parent.range!),
+      text: astNodeText,
+    });
+  }
+}
+
+@RegisterAction
+class ExtractToParentLevel extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['e'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const currentNode = vimState.currentAstNode;
+    if (!currentNode) {
+      return;
+    }
+    let parent = await getParentAstNode(currentNode, vimState);
+    if (!parent) {
+      return;
+    }
+    if (parent.kind === 'Compound') {
+      const grandParent = await getParentAstNode(parent, vimState);
+      if (grandParent?.kind !== 'Compound') {
+        parent = grandParent ?? parent;
+      }
+    }
+
+    const converter = globalThis.clangContext.client.protocol2CodeConverter;
+    let astNodeRange = globalThis.clangContext.client.protocol2CodeConverter.asRange(
+      currentNode.range!
+    );
+    astNodeRange = getRangeWithSemiColon(astNodeRange);
+    let entireNodeRange = getEntireNodeRange(astNodeRange);
+
+    const document = vscode.window.activeTextEditor!.document;
+    if (
+      document.lineAt(entireNodeRange.start.line).firstNonWhitespaceCharacterIndex ===
+      entireNodeRange.start.character
+    ) {
+      entireNodeRange = new vscode.Range(
+        entireNodeRange.start.getUp().getLineEndIncludingEOL(),
+        entireNodeRange.end
+      );
+    }
+
+    vimState.recordedState.transformer.addTransformation({
+      type: 'deleteRange',
+      range: entireNodeRange,
+      manuallySetCursorPositions: true,
+    });
+
+    const astNodeText = document.getText(astNodeRange);
+    const parentLine = parent.range!.start.line;
+    vimState.recordedState.transformer.addTransformation({
+      type: 'insertText',
+      text:
+        astNodeText +
+        '\n' +
+        document.getText(
+          new vscode.Range(
+            parentLine,
+            0,
+            parentLine,
+            document.lineAt(parentLine).firstNonWhitespaceCharacterIndex
+          )
+        ),
+      position: converter.asPosition(parent.range!.start),
+      cursorIndex: 0,
+      manuallySetCursorPositions: true,
+    });
+  }
+}
+
+function getCursorForNode(node: ASTNode): Cursor {
+  const converter = globalThis.clangContext.client.protocol2CodeConverter;
+  let newPosition = converter.asPosition(node.range!.start);
+
+  const document = vscode.window.activeTextEditor!.document;
+  if (
+    node.kind === 'Decl' &&
+    node.children &&
+    node.children[0].kind === 'Var' &&
+    node.children[0].children
+  ) {
+    newPosition = converter.asPosition(node.children[0].children[0].range!.end);
+    while (document.lineAt(newPosition.line).text.charAt(newPosition.character) === ' ') {
+      newPosition = newPosition.getRightThroughLineBreaks();
+    }
+  }
+
+  return new Cursor(newPosition, newPosition);
+}
+
+@RegisterAction
+class ExpandToParentNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['k'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const parentNode = await getParentAstNode(vimState.currentAstNode, vimState);
+    if (parentNode) {
+      vimState.cursors[0] = getCursorForNode(parentNode);
+      vimState.currentAstNode = parentNode;
+    }
+  }
+}
+
+function getChildIfImplicitCast(node: ASTNode): ASTNode {
+  return node.kind !== 'ImplicitCast' ? node : node.children![0];
+}
+
+@RegisterAction
+class ContractToFirstChildNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['j'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    if (vimState.currentAstNode?.children) {
+      vimState.currentParent = vimState.currentAstNode;
+      const newNode = getChildIfImplicitCast(vimState.currentAstNode.children[0]);
+      vimState.cursors[0] = getCursorForNode(newNode);
+      vimState.currentAstNode = newNode;
+    }
+  }
+}
+
+@RegisterAction
+class GetPreviousSibling extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['h'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const parentNode = await getParentAstNode(vimState.currentAstNode, vimState);
+    if (parentNode) {
+      const numChildren = parentNode.children!.length;
+      let i = 0;
+      for (; i < numChildren; i++) {
+        if (areEqual(parentNode.children![i], vimState.currentAstNode!)) {
+          i = i !== 0 ? i - 1 : numChildren - 1;
+          break;
+        }
+      }
+      const newNode = getChildIfImplicitCast(parentNode.children![i]);
+      vimState.cursors[0] = getCursorForNode(newNode);
+      vimState.currentAstNode = newNode;
+    }
+  }
+}
+
+@RegisterAction
+class GetNextSibling extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['l'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const parentNode = await getParentAstNode(vimState.currentAstNode, vimState);
+    if (parentNode) {
+      const numChildren = parentNode.children!.length;
+      let i = 0;
+      for (; i < numChildren; i++) {
+        if (areEqual(parentNode.children![i], vimState.currentAstNode!)) {
+          i = (i + 1) % numChildren;
+          break;
+        }
+      }
+      const newNode = getChildIfImplicitCast(parentNode.children![i]);
+      vimState.cursors[0] = getCursorForNode(newNode);
+      vimState.currentAstNode = newNode;
+    }
   }
 }

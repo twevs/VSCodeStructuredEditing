@@ -46,6 +46,7 @@ import { Position, Uri } from 'vscode';
 import { RemapState } from '../state/remapState';
 import * as process from 'process';
 import { EasyMotion } from '../actions/plugins/easymotion/easymotion';
+import { highlightAstNodeUnderCursor as highlightCurrentAstNode } from '../clangd/structural-editing';
 
 interface IModeHandlerMap {
   get(editorId: Uri): ModeHandler | undefined;
@@ -694,6 +695,20 @@ export class ModeHandler implements vscode.Disposable, IModeHandler {
 
     // Update view
     await this.updateView();
+
+    // There is unfortunately no key release event to bind to, which means that there doesn't really seem to be an easy way to
+    // avoid sending clangd a lot of wasteful requests during repeat key presses. To try to mitigate this, we use promise
+    // caching to have it only handle one request at a time and only chain the most recent relevant request.
+
+    // TODO (Thomas): nullify currentAstNode and currentParent if the document is changed or ensure they are set according to wherever the
+    // cursor is?
+    if (this.vimState.currentClangdPromise) {
+      this.vimState.pendingClangdPromise = this.vimState.currentClangdPromise.then(() => {
+        this.vimState.currentClangdPromise = highlightCurrentAstNode(this.vimState);
+      });
+    } else {
+      this.vimState.currentClangdPromise = highlightCurrentAstNode(this.vimState);
+    }
 
     if (action.isJump) {
       globalState.jumpTracker.recordJump(
