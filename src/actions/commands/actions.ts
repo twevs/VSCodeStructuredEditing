@@ -2674,3 +2674,38 @@ class ShowFileOutline extends BaseCommand {
     await vscode.commands.executeCommand('outline.focus');
   }
 }
+
+/**
+ * Clang.
+ */
+
+@RegisterAction
+class DeleteAstNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['Q'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const astNodeRange = vimState.currentAstNode?.range;
+    if (astNodeRange !== undefined)
+    {
+      // TODO: check if there is a simpler way to do this, seems a bit janky.
+      // TODO: handle this case better, really we should delete the whole line if the semi-colon is all that's left.
+      if (vscode.window.activeTextEditor!.document.lineAt(astNodeRange.end.line).text.at(astNodeRange.end.character) == ';')
+      {
+        astNodeRange.end.character++;
+      }
+      vimState.recordedState.transformer.addTransformation({
+        type: 'deleteRange',
+        range: globalThis.clangContext.client.protocol2CodeConverter.asRange(astNodeRange),
+        manuallySetCursorPositions: true,
+      });
+      // TODO: check whether to use this.
+      // vimState.lastAstNode = null;
+    }
+  }
+}

@@ -10,7 +10,6 @@ import * as memoryUsage from './memory-usage';
 import * as openConfig from './open-config';
 import * as switchSourceHeader from './switch-source-header';
 import * as typeHierarchy from './type-hierarchy';
-import * as motion from '../actions/motion'
 
 export const clangdDocumentSelector = [
   {scheme: 'file', language: 'c'},
@@ -164,12 +163,8 @@ export class ClangdContext implements vscode.Disposable {
     console.log('Clang Language Server is now active!');
     fileStatus.activate(this);
     switchSourceHeader.activate(this);
-    let myLog = vscode.window.createOutputChannel("Thomas");
-    myLog.appendLine('Calling configFileWatcher.activate()');
     configFileWatcher.activate(this);
-    myLog.appendLine('Calling motion.activate()');
     globalThis.clangContext = this;
-    myLog.appendLine('Called motion.activate()');
   }
 
   get visibleClangdEditors(): vscode.TextEditor[] {
