@@ -34,6 +34,7 @@ import { shouldWrapKey } from '../wrapping';
 import { ErrorCode, VimError } from '../../error';
 import { SearchDirection } from '../../vimscript/pattern';
 import { doesFileExist } from 'platform/fs';
+import { getParentAstNode } from '../../clangd/editor-services';
 
 /**
  * A very special snowflake.
@@ -2695,7 +2696,7 @@ class DeleteAstNode extends BaseCommand {
     {
       // TODO: check if there is a simpler way to do this, seems a bit janky.
       // TODO: handle this case better, really we should delete the whole line if the semi-colon is all that's left.
-      if (vscode.window.activeTextEditor!.document.lineAt(astNodeRange.end.line).text.at(astNodeRange.end.character) == ';')
+      if (vscode.window.activeTextEditor!.document.lineAt(astNodeRange.end.line).text.charAt(astNodeRange.end.character) == ';')
       {
         astNodeRange.end.character++;
       }
@@ -2706,6 +2707,44 @@ class DeleteAstNode extends BaseCommand {
       });
       // TODO: check whether to use this.
       // vimState.lastAstNode = null;
+    }
+  }
+}
+
+@RegisterAction
+class ReplaceParentAstNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['W'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    var parentAstNodeRange = await getParentAstNode(vimState.currentAstNode);
+    if (parentAstNodeRange !== null)
+    {
+      const converter = globalThis.clangContext.client.protocol2CodeConverter;
+      // TODO:
+      // - remove scope braces and unindent when appropriate to do so;
+      // - highlight parent node;
+      // - go over all usages of the ? and ! operators and test all of these code paths for robustness;
+      // - edit virtual nodes, such that:
+      //   - "&message" is considered one node, rather than an "&" node with a "message" child;
+      //   - "func()" is considered one node, rather than a "Call" node with a "func" child.
+      const document = vscode.window.activeTextEditor!.document;
+      var astNodeRange = vimState.currentAstNode!.range;
+      if (document.lineAt(astNodeRange!.end.line).text.charAt(astNodeRange!.end.character) == ';')
+      {
+        astNodeRange!.end = new vscode.Position(astNodeRange!.end.line, astNodeRange!.end.character + 1);
+      }
+      const astNodeText = document.getText(converter.asRange(astNodeRange));
+      vimState.recordedState.transformer.addTransformation({
+        type: 'replaceText',
+        range: converter.asRange(parentAstNodeRange!.range!),
+        text: astNodeText
+      });
     }
   }
 }
