@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as vscodelc from 'vscode-languageclient';
 
 import { RecordedState } from '../../state/recordedState';
 import { VimState } from '../../state/vimState';
@@ -35,6 +36,7 @@ import { ErrorCode, VimError } from '../../error';
 import { SearchDirection } from '../../vimscript/pattern';
 import { doesFileExist } from 'platform/fs';
 import { getParentAstNode } from '../../clangd/editor-services';
+import assert from 'assert';
 
 /**
  * A very special snowflake.
@@ -2683,7 +2685,7 @@ class ShowFileOutline extends BaseCommand {
 @RegisterAction
 class DeleteAstNode extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q'];
+  keys = ['Q', 'd'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2711,10 +2713,20 @@ class DeleteAstNode extends BaseCommand {
   }
 }
 
+function getRangeWithTrailingSemiColon(range: vscodelc.Range): vscodelc.Range
+{
+  const document = vscode.window.activeTextEditor!.document;
+  if (document.lineAt(range.end.line).text.charAt(range.end.character) == ';')
+  {
+    range.end = new vscode.Position(range.end.line, range.end.character + 1);
+  }
+  return range;
+}
+
 @RegisterAction
 class ReplaceParentAstNode extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['W'];
+  keys = ['Q', 'r'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2733,18 +2745,54 @@ class ReplaceParentAstNode extends BaseCommand {
       // - edit virtual nodes, such that:
       //   - "&message" is considered one node, rather than an "&" node with a "message" child;
       //   - "func()" is considered one node, rather than a "Call" node with a "func" child.
-      const document = vscode.window.activeTextEditor!.document;
-      var astNodeRange = vimState.currentAstNode!.range;
-      if (document.lineAt(astNodeRange!.end.line).text.charAt(astNodeRange!.end.character) == ';')
-      {
-        astNodeRange!.end = new vscode.Position(astNodeRange!.end.line, astNodeRange!.end.character + 1);
-      }
-      const astNodeText = document.getText(converter.asRange(astNodeRange));
+      const astNodeRange = getRangeWithTrailingSemiColon(vimState.currentAstNode!.range!);
+      const astNodeText = vscode.window.activeTextEditor!.document.getText(converter.asRange(astNodeRange));
       vimState.recordedState.transformer.addTransformation({
         type: 'replaceText',
         range: converter.asRange(parentAstNodeRange!.range!),
         text: astNodeText
       });
     }
+  }
+}
+
+@RegisterAction
+class ExtractToParentLevel extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['Q', 'e'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    // 1. Get parent node.
+    // 2. Delete child node text.
+    // 3. Insert that same text above the parent.
+    const currentNode = vimState.currentAstNode;
+    assert(currentNode);
+    const parent = await getParentAstNode(currentNode);
+    assert(parent);
+
+    const converter = globalThis.clangContext.client.protocol2CodeConverter;
+    const astNodeRange = converter.asRange(getRangeWithTrailingSemiColon(vimState.currentAstNode!.range!));
+
+    vimState.recordedState.transformer.addTransformation({
+      type: 'deleteRange',
+      range: astNodeRange,
+      manuallySetCursorPositions: true,
+    });
+
+    const document = vscode.window.activeTextEditor!.document;
+    const astNodeText = document.getText(astNodeRange);
+    const parentLine = parent.range!.start.line;
+    vimState.recordedState.transformer.addTransformation({
+      type: 'insertText',
+      text: astNodeText + '\n' + document.getText(new vscode.Range(parentLine, 0, parentLine, document.lineAt(parentLine).firstNonWhitespaceCharacterIndex)),
+      position: converter.asPosition(parent.range!.start),
+      cursorIndex: 0,
+      manuallySetCursorPositions: true,
+    });
   }
 }
