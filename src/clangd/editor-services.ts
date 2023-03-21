@@ -39,14 +39,11 @@ export const highlightAstNode = async (): Promise<ASTNode | null> => {
   if (!item) {
     vscode.window.showInformationMessage('No AST node at selection');
   } else {
-    var mylog = vscode.window.createOutputChannel('Testing');
     // See note above function.
     if (item.kind == "DeclRef")
     {
       const parent = await getParentAstNode(item);
       assert(parent);
-      mylog.appendLine('parent.kind == ' + parent.kind);
-      mylog.appendLine('parent.detail == ' + parent.detail);
       if (parent.kind == "Call" || parent.kind == "UnaryOperator")
       {
         item = parent;
@@ -79,7 +76,17 @@ function areEqual(a: ASTNode, b: ASTNode): boolean
 
 // If potentialAncestor is potentialDescendant's direct parent or counts potentialDescendant's
 // direct parent among its children, returns that parent; else, returns null.
-function containsParent(potentialAncestor: ASTNode, potentialDescendant: ASTNode): ASTNode | null
+// NOTE: if the parent AST node is a compound statement whose parent is not itself a compound statement,
+// this function returns the grandparent for the sake of convenience and intuition. For example, in the
+// case of:
+//
+// for (int i = 0; i < 3; i++)
+// {
+//     sum += i;
+// }
+//
+// getParentFromAncestor() will return the whole for loop as the parent of "sum += i".
+const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescendant: ASTNode): Promise<ASTNode | null> =>
 {
   if (!potentialAncestor || !potentialAncestor.children || !potentialDescendant)
   {
@@ -91,11 +98,20 @@ function containsParent(potentialAncestor: ASTNode, potentialDescendant: ASTNode
     {
       if (areEqual(child, potentialDescendant))
       {
+        if (potentialAncestor.kind == "Compound")
+        {
+          const grandParent = await getParentAstNode(potentialAncestor);
+          assert(grandParent);
+          if (grandParent.kind != "Compound")
+          {
+            return grandParent;
+          }
+        }
         return potentialAncestor;
       }
       else
       {
-        const childSearch = containsParent(child, potentialDescendant);
+        const childSearch = await getParentFromAncestor(child, potentialDescendant);
         if (childSearch)
         {
           return childSearch;
@@ -126,39 +142,24 @@ export const getParentAstNode = async(node: ASTNode | null): Promise<ASTNode | n
   var currentLine = currentPosition.line;
   var currentCharacter = currentPosition.character;
 
-  let myLog = vscode.window.createOutputChannel('Thomas');
-
   while (parentAstNode === null)
   {
     // Work backwards until we get a character that can be used in an AST request.
     var previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
-    myLog.appendLine('previousCharacter == ' + previousCharacter);
     // TODO: verify whether some of these checks can be jettisoned.
     while (previousCharacter.indexOf(' ') >= 0
     || previousCharacter.indexOf(';') >= 0
     || previousCharacter.indexOf('\n') >= 0
     || previousCharacter.indexOf('\r\n') >= 0)
     {
-      myLog.appendLine('previousCharacter is whitespace or semi-colon, going back');
       currentPosition = currentPosition.getLeftThroughLineBreaks();
-      myLog.appendLine('currentPosition.character == ' + currentPosition.character);
-      myLog.appendLine('document.lineAt(currentPosition.line).text.length == ' + document.lineAt(currentPosition.line).text.length);
       while (currentPosition.character == document.lineAt(currentPosition.line).text.length)
       {
         currentPosition = currentPosition.getLeftThroughLineBreaks();
       }
       currentLine = currentPosition.line;
       currentCharacter = currentPosition.character;
-      myLog.appendLine(currentLine + ':' + currentCharacter);
       previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
-      myLog.appendLine('previousCharacter is now ' + previousCharacter);
-
-      myLog.append('hex: ');
-      for (var char of previousCharacter)
-      {
-        myLog.append(char.charCodeAt(0).toString(16));
-      }
-      myLog.append('\n');
     }
 
     // Now that we have a valid character, make the AST request.
@@ -168,13 +169,29 @@ export const getParentAstNode = async(node: ASTNode | null): Promise<ASTNode | n
       range: c2p.asRange(new vscode.Range(currentLine, currentCharacter, currentLine, currentCharacter + 1)),
     });
 
-    myLog.appendLine('candidateParent == ' + candidateAncestor?.kind);
+    assert(candidateAncestor);
 
-    // Now that we have a candidate parent, recurse through its descendants. Either:
+    // First, we have to check that this candidate ancestor is not in fact a *child* of node. This is necessary
+    // because in the Clang AST, the namespace is a child of the node it qualifies, eg in
+    //     "ImGui::Separator();"
+    // "ImGui::" is a child of the "Separator" DeclRef.
+    var potentialAncestorIsActuallyChild: boolean = false;
+    if (node.children)
+    {
+      for (var child of node.children)
+      {
+        if (areEqual(child, candidateAncestor))
+        {
+          potentialAncestorIsActuallyChild = true;
+          break;
+        }
+      }
+    }
+
+    // Now that we have a candidate ancestor, recurse through its descendants. Either:
     // - we find node, in which case we can return its parent;
     // - we don't, in which case we continue the search backwards from the beginning of the candidate parent's range.
-    assert(candidateAncestor);
-    const candidateParent = containsParent(candidateAncestor, node);
+    const candidateParent = potentialAncestorIsActuallyChild ? null : await getParentFromAncestor(candidateAncestor, node);
     if (candidateParent)
     {
       parentAstNode = candidateParent;
