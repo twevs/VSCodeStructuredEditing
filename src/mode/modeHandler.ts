@@ -46,7 +46,7 @@ import { Position, Uri } from 'vscode';
 import { RemapState } from '../state/remapState';
 import * as process from 'process';
 import { EasyMotion } from '../actions/plugins/easymotion/easymotion';
-import { highlightAstNode } from '../clangd/editor-services';
+import { highlightAstNodeUnderCursor } from '../clangd/editor-services';
 
 interface IModeHandlerMap {
   get(editorId: Uri): ModeHandler | undefined;
@@ -695,7 +695,24 @@ export class ModeHandler implements vscode.Disposable, IModeHandler {
 
     // Update view
     await this.updateView();
-    this.vimState.currentAstNode = await highlightAstNode();
+
+    // There is unfortunately no key release event to bind to, which means that there doesn't really seem to be an easy way to
+    // avoid sending clangd a lot of wasteful requests during repeat key presses. To try to mitigate this, we use promise
+    // caching to have it only handle one request at a time and only chain the most recent relevant request.
+    if (this.vimState.currentClangdPromise)
+    {
+      this.vimState.cancelPendingClangdPromise();
+      this.vimState.pendingClangdPromise = this.vimState.currentClangdPromise.then(
+        () =>
+        {
+          this.vimState.currentClangdPromise = highlightAstNodeUnderCursor(this.vimState);
+        }
+      );
+    }
+    else
+    {
+      this.vimState.currentClangdPromise = highlightAstNodeUnderCursor(this.vimState);
+    }
 
     if (action.isJump) {
       globalState.jumpTracker.recordJump(
