@@ -329,6 +329,9 @@ export class VimState implements vscode.Disposable {
     }
   }
 
+  public currentClangdPromise: Promise<void> | null = null;
+  public pendingClangdPromise: Promise<void> | null = null;
+  public cancelPendingClangdPromise: Function = new Function();
   public currentAstNode: ASTNode | null = null;
 
   dispose() {

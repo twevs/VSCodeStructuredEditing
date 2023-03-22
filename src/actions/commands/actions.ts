@@ -35,8 +35,8 @@ import { shouldWrapKey } from '../wrapping';
 import { ErrorCode, VimError } from '../../error';
 import { SearchDirection } from '../../vimscript/pattern';
 import { doesFileExist } from 'platform/fs';
-import { getParentAstNode } from '../../clangd/editor-services';
-import assert from 'assert';
+import { areEqual, getParentAstNode, highlightAstNode } from '../../clangd/editor-services';
+import { ASTNode } from 'src/clangd/ast';
 
 /**
  * A very special snowflake.
@@ -2682,6 +2682,32 @@ class ShowFileOutline extends BaseCommand {
  * Clang.
  */
 
+function getRangeWithSemiColon(range: vscode.Range): vscode.Range
+{
+  const document = vscode.window.activeTextEditor!.document;
+  const start = range.start;
+  var end = range.end;
+  const text = document.lineAt(range.end.line).text;
+  if (text.charAt(end.character) == ';')
+  {
+    end = new vscode.Position(range.end.line, range.end.character + 1);
+  }
+  return new vscode.Range(start, end);
+}
+
+function getEntireNodeRange(range: vscode.Range): vscode.Range
+{
+  const document = vscode.window.activeTextEditor!.document;
+  const start = range.start;
+  var end = range.end;
+  const text = document.lineAt(range.end.line).text;
+  if (text.length == end.character || text.charAt(end.character) == ';')
+  {
+    end = new vscode.Position(range.end.line, range.end.character + 1);
+  }
+  return new vscode.Range(start, end);
+}
+
 @RegisterAction
 class DeleteAstNode extends BaseCommand {
   modes = [Mode.Normal];
@@ -2693,34 +2719,25 @@ class DeleteAstNode extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    const astNodeRange = vimState.currentAstNode?.range;
-    if (astNodeRange !== undefined)
-    {
-      // TODO: check if there is a simpler way to do this, seems a bit janky.
-      // TODO: handle this case better, really we should delete the whole line if the semi-colon is all that's left.
-      if (vscode.window.activeTextEditor!.document.lineAt(astNodeRange.end.line).text.charAt(astNodeRange.end.character) == ';')
-      {
-        astNodeRange.end.character++;
-      }
-      vimState.recordedState.transformer.addTransformation({
-        type: 'deleteRange',
-        range: globalThis.clangContext.client.protocol2CodeConverter.asRange(astNodeRange),
-        manuallySetCursorPositions: true,
-      });
-      // TODO: check whether to use this.
-      // vimState.lastAstNode = null;
-    }
-  }
-}
+    // TODO: check my usages of currentAstNode, is it ever null?
+    var astNodeRange = globalThis.clangContext.client.protocol2CodeConverter.asRange(vimState.currentAstNode!.range!);
+    astNodeRange = getRangeWithSemiColon(astNodeRange);
+    var entireNodeRange = getEntireNodeRange(astNodeRange);
 
-function getRangeWithTrailingSemiColon(range: vscodelc.Range): vscodelc.Range
-{
-  const document = vscode.window.activeTextEditor!.document;
-  if (document.lineAt(range.end.line).text.charAt(range.end.character) == ';')
-  {
-    range.end = new vscode.Position(range.end.line, range.end.character + 1);
+    const document = vscode.window.activeTextEditor!.document;
+    if (document.lineAt(entireNodeRange.start.line).firstNonWhitespaceCharacterIndex == entireNodeRange.start.character)
+    {
+      entireNodeRange = new vscode.Range(entireNodeRange.start.getUp().getLineEndIncludingEOL(), entireNodeRange.end);
+    }
+
+    vimState.recordedState.transformer.addTransformation({
+      type: 'deleteRange',
+      range: entireNodeRange,
+      manuallySetCursorPositions: true,
+    });
+    // TODO: check whether to use this.
+    // vimState.lastAstNode = null;
   }
-  return range;
 }
 
 @RegisterAction
@@ -2734,22 +2751,19 @@ class ReplaceParentAstNode extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    var parentAstNodeRange = await getParentAstNode(vimState.currentAstNode);
-    if (parentAstNodeRange !== null)
+    var parentAstNode = await getParentAstNode(vimState.currentAstNode);
+    if (parentAstNode !== null)
     {
       const converter = globalThis.clangContext.client.protocol2CodeConverter;
       // TODO:
       // - remove scope braces and unindent when appropriate to do so;
       // - highlight parent node;
-      // - go over all usages of the ? and ! operators and test all of these code paths for robustness;
-      // - edit virtual nodes, such that:
-      //   - "&message" is considered one node, rather than an "&" node with a "message" child;
-      //   - "func()" is considered one node, rather than a "Call" node with a "func" child.
-      const astNodeRange = getRangeWithTrailingSemiColon(vimState.currentAstNode!.range!);
-      const astNodeText = vscode.window.activeTextEditor!.document.getText(converter.asRange(astNodeRange));
+      // - go over all usages of the ? and ! operators and test all of these code paths for robustness.
+      const astNodeRange = getEntireNodeRange(getRangeWithSemiColon(converter.asRange(vimState.currentAstNode!.range!)));
+      const astNodeText = vscode.window.activeTextEditor!.document.getText(astNodeRange);
       vimState.recordedState.transformer.addTransformation({
         type: 'replaceText',
-        range: converter.asRange(parentAstNodeRange!.range!),
+        range: converter.asRange(parentAstNode!.range!),
         text: astNodeText
       });
     }
@@ -2767,24 +2781,39 @@ class ExtractToParentLevel extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    // 1. Get parent node.
-    // 2. Delete child node text.
-    // 3. Insert that same text above the parent.
     const currentNode = vimState.currentAstNode;
-    assert(currentNode);
-    const parent = await getParentAstNode(currentNode);
-    assert(parent);
+    var parent = await getParentAstNode(currentNode);
+    // TODO: proper error handling.
+    if (!parent)
+    {
+      return;
+    }
+    if (parent.kind == "ExprWithCleanups")
+    {
+      parent = await getParentAstNode(parent);
+      if (!parent)
+      {
+        return;
+      }
+    }
 
     const converter = globalThis.clangContext.client.protocol2CodeConverter;
-    const astNodeRange = converter.asRange(getRangeWithTrailingSemiColon(vimState.currentAstNode!.range!));
+    var astNodeRange = globalThis.clangContext.client.protocol2CodeConverter.asRange(vimState.currentAstNode!.range!);
+    astNodeRange = getRangeWithSemiColon(astNodeRange);
+    var entireNodeRange = getEntireNodeRange(astNodeRange);
+
+    const document = vscode.window.activeTextEditor!.document;
+    if (document.lineAt(entireNodeRange.start.line).firstNonWhitespaceCharacterIndex == entireNodeRange.start.character)
+    {
+      entireNodeRange = new vscode.Range(entireNodeRange.start.getUp().getLineEndIncludingEOL(), entireNodeRange.end);
+    }
 
     vimState.recordedState.transformer.addTransformation({
       type: 'deleteRange',
-      range: astNodeRange,
+      range: entireNodeRange,
       manuallySetCursorPositions: true,
     });
 
-    const document = vscode.window.activeTextEditor!.document;
     const astNodeText = document.getText(astNodeRange);
     const parentLine = parent.range!.start.line;
     vimState.recordedState.transformer.addTransformation({
@@ -2794,5 +2823,120 @@ class ExtractToParentLevel extends BaseCommand {
       cursorIndex: 0,
       manuallySetCursorPositions: true,
     });
+  }
+}
+
+function getCursorForNode(node: ASTNode): Cursor
+{
+  const converter = globalThis.clangContext.client.protocol2CodeConverter;
+  var newPosition = converter.asPosition(node.range!.start);
+  const document = vscode.window.activeTextEditor!.document;
+
+  if (node.kind == "Decl"
+  && node.children && node.children[0].kind == "Var"
+  && node.children[0].children)
+  {
+    newPosition = converter.asPosition(node.children[0].children[0].range!.end);
+    while (document.lineAt(newPosition.line).text.charAt(newPosition.character) == ' ')
+    {
+      newPosition = newPosition.getRightThroughLineBreaks();
+    }
+  }
+
+  return new Cursor(newPosition, newPosition);
+}
+
+@RegisterAction
+class ExpandToParentNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['Q', 'p'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const parentNode = await getParentAstNode(vimState.currentAstNode);
+    if (parentNode)
+    {
+      vimState.cursors[0] = getCursorForNode(parentNode);
+    }
+  }
+}
+
+@RegisterAction
+class ContractToFirstChildNode extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['Q', 'c'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    if (vimState.currentAstNode?.children)
+    {
+      vimState.cursors[0] = getCursorForNode(vimState.currentAstNode.children[0]);
+    }
+  }
+}
+
+@RegisterAction
+class GetPreviousSibling extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['Q', 'a'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const parentNode = await getParentAstNode(vimState.currentAstNode, true);
+    if (parentNode)
+    {
+      const numChildren = parentNode.children!.length;
+      var i = 0;
+      for (; i < numChildren; i++)
+      {
+        if (areEqual(parentNode.children![i], vimState.currentAstNode!))
+        {
+          i = (i != 0) ? i - 1 : numChildren - 1;
+          break;
+        }
+      }
+      vimState.cursors[0] = getCursorForNode(parentNode.children![i]);
+    }
+  }
+}
+
+@RegisterAction
+class GetNextSibling extends BaseCommand {
+  modes = [Mode.Normal];
+  keys = ['Q', 's'];
+
+  override createsUndoPoint = true;
+  override runsOnceForEveryCursor() {
+    return false;
+  }
+
+  public override async exec(position: Position, vimState: VimState): Promise<void> {
+    const parentNode = await getParentAstNode(vimState.currentAstNode, true);
+    if (parentNode)
+    {
+      const numChildren = parentNode.children!.length;
+      var i = 0;
+      for (; i < numChildren; i++)
+      {
+        if (areEqual(parentNode.children![i], vimState.currentAstNode!))
+        {
+          i = (i + 1) % numChildren;
+          break;
+        }
+      }
+      vimState.cursors[0] = getCursorForNode(parentNode.children![i]);
+    }
   }
 }
