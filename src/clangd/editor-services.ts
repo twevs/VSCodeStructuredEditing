@@ -6,6 +6,8 @@ import { ClangdContext } from 'src/clangd/clangd-context';
 import { VimState } from 'src/state/vimState';
 import { reject } from 'lodash';
 
+const myLog = vscode.window.createOutputChannel('Parent search');
+
 declare global {
   var clangContext: ClangdContext;
 }
@@ -92,7 +94,7 @@ export const highlightAstNodeUnderCursor = async (vimState: VimState): Promise<v
     textDocument: converter.asTextDocumentIdentifier(editor!.document),
     range: converter.asRange(new vscode.Range(cursorPosition, cursorPosition.getRight())),
   });
-  if (!item) {
+  if (!item || !item.range) {
     const selectionRange = converter.asRange(editor!.selection);
     vscode.window.showInformationMessage(
       'No AST node at selection ('
@@ -137,15 +139,28 @@ const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescend
   // ' -> ' + potentialDescendant?.range?.end.line + ':' + potentialDescendant?.range?.end.character + ')');
   if (!potentialAncestor || !potentialAncestor.children || !potentialDescendant)
   {
+    myLog.appendLine('getParentFromAncestor() called with null argument (probably potentialAncestor.children)');
+
     return null;
   }
   else
   {
+    myLog.appendLine('getParentFromAncestor() called with potentialAncestor == '
+    + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character + ' -> '
+    + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ') and potentialDescendant == '
+    + potentialDescendant.kind + ' (' + potentialDescendant.range?.start.line + ':' + potentialDescendant.range?.start.character + ' -> '
+    + potentialDescendant.range?.end.line + ':' + potentialDescendant.range?.end.character + ')');
+
     for (var child of potentialAncestor.children)
     {
+      myLog.appendLine('looking at potential ancestor\'s child: ' + child.kind + ' (' + child.range?.start.line + ':' + child.range?.start.character + ' -> '
+      + child.range?.end.line + ':' + child.range?.end.character + ')');
+
       // vscode.window.showInformationMessage('Testing child ' + child.kind + ' at ' + child.range?.start.line + ':' + child.range?.start.character + '');
       if (areEqual(child, potentialDescendant))
       {
+        myLog.appendLine('it\'s a match');
+
         if (!forceCompoundParent && potentialAncestor.kind == "Compound" && potentialDescendant.kind != "Compound")
         {
           const grandParent = await getParentAstNode(potentialAncestor);
@@ -163,15 +178,29 @@ const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescend
       }
       else
       {
+        myLog.appendLine('it\'s not a match, looking in children\'s children');
+
         const childSearch = await getParentFromAncestor(child, potentialDescendant, forceCompoundParent);
         if (childSearch)
         {
+          myLog.appendLine('child search succeeded: ' + childSearch.kind + ' (' + childSearch.range?.start.line + ':' + childSearch.range?.start.character + ' -> '
+          + childSearch.range?.end.line + ':' + childSearch.range?.end.character + ')');
+
           return childSearch;
+        }
+        else
+        {
+          myLog.appendLine('child search failed');
         }
       }
     }
   }
 
+  myLog.appendLine('failed to find parent, returning null with potentialAncestor == '
+  + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character + ' -> '
+  + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ') and potentialDescendant == '
+  + potentialDescendant.kind + ' (' + potentialDescendant.range?.start.line + ':' + potentialDescendant.range?.start.character + ' -> '
+  + potentialDescendant.range?.end.line + ':' + potentialDescendant.range?.end.character + ')');
   return null;
 }
 
@@ -192,6 +221,7 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
   var parentAstNode: ASTNode | null = null;
   var nodeRange = node.range;
 
+  const c2p = clangContext.client.code2ProtocolConverter;
   const p2c = clangContext.client.protocol2CodeConverter;
   const editor = vscode.window.activeTextEditor;
   const document = editor!.document;
@@ -201,6 +231,8 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
 
   while (parentAstNode === null)
   {
+    myLog.appendLine('searching for parent at ' + currentLine + ':' + currentCharacter);
+
     // Work backwards until we get a character that can be used in an AST request.
 
     // First, try to skip whole lines.
@@ -214,9 +246,21 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
       // TODO: fix this causing an infinite loop when trying to get the parent of lines near the top of the file that match the criteria.
       if (line.isEmptyOrWhitespace || (firstCharInLine == '/' && secondCharInLine == '/') || firstCharInLine == '#')
       {
+        myLog.appendLine('skipping line');
+
         currentPosition = currentPosition.getUp().getLineEnd();
         currentLine = currentPosition.line;
         currentCharacter = currentPosition.character;
+
+        if (currentLine == 0)
+        {
+          const candidateAncestor = await clangContext.client.sendRequest(ASTRequestType, {
+            textDocument: c2p.asTextDocumentIdentifier(editor!.document),
+            range: null,
+          });
+          vscode.window.showInformationMessage('returning ' + candidateAncestor?.kind);
+          return candidateAncestor;
+        }
       }
       else
       {
@@ -226,9 +270,13 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
 
     // Now, try to skip character ranges.
     var previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
+    myLog.appendLine('character is: ' + previousCharacter);
+
     // TODO: verify whether some of these checks can be jettisoned.
     while (previousCharacter == ' ' || previousCharacter == ';' || previousCharacter == '\n' || previousCharacter == '\r\n' || previousCharacter == '\t')
     {
+      myLog.appendLine('skipping character');
+
       currentPosition = currentPosition.getLeftThroughLineBreaks();
       while (currentPosition.character == document.lineAt(currentPosition.line).text.length)
       {
@@ -237,10 +285,11 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
       currentLine = currentPosition.line;
       currentCharacter = currentPosition.character;
       previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
+
+      myLog.appendLine('skipped to ' + currentLine + ':' + currentCharacter + ' == ' + previousCharacter);
     }
 
     // Now that we have a valid character, make the AST request.
-    const c2p = clangContext.client.code2ProtocolConverter;
     var candidateAncestor = await clangContext.client.sendRequest(ASTRequestType, {
       textDocument: c2p.asTextDocumentIdentifier(editor!.document),
       range: c2p.asRange(new vscode.Range(currentLine, currentCharacter, currentLine, currentCharacter + 1)),
@@ -251,6 +300,8 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
     // If there isn't an AST node for the character, we're probably in a comment or preprocessor directive.
     if (candidateAncestor)
     {
+      myLog.appendLine('AST request succeeded');
+
       // First, we have to check that this candidate ancestor is not in fact a *child* of node. This is necessary
       // because in the Clang AST, the namespace is a child of the node it qualifies, eg in
       //     "ImGui::Separator();"
@@ -274,18 +325,35 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
       const candidateParent = potentialAncestorIsActuallyChild ? null : await getParentFromAncestor(candidateAncestor, node, forceCompoundParent);
       if (candidateParent)
       {
+        myLog.appendLine('found candidateParent: ' + candidateParent.kind + ' (' + candidateParent.range?.start.line + ':' + candidateParent.range?.start.character + ' -> '
+        + candidateParent.range?.end.line + ':' + candidateParent.range?.end.character + ')');
+
         return candidateParent;
       }
+      else
+      {
+        myLog.appendLine('failed to find candidateParent');
+      }
+
+      myLog.appendLine('pushing back currentPosition to start of node range');
 
       // This fixes some issues with GET_X_LPARAM() and GET_Y_LPARAM().
       currentPosition = candidateAncestor.range ?
           p2c.asPosition(candidateAncestor.range!.start)?.getLeftThroughLineBreaks()
         : currentPosition.getLeftThroughLineBreaks();
     }
+    else
+    {
+      myLog.appendLine('AST request failed');
+    }
+
+    myLog.appendLine('pushing back currentPosition');
 
     currentPosition = currentPosition.getLeftThroughLineBreaks();
     currentLine = currentPosition.line;
     currentCharacter = currentPosition.character;
+
+    myLog.appendLine('going back to ' + currentLine + ':' + currentCharacter);
   }
   return parentAstNode;
 }
