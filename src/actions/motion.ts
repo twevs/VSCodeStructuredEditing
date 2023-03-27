@@ -287,7 +287,7 @@ class MoveDownFoldFix extends MoveByScreenLineMaintainDesiredColumn {
 
 @RegisterAction
 class MoveDown extends BaseMovement {
-  keys = [['j'], ['<down>'], ['<C-j>'], ['<C-n>']];
+  keys = [['<down>'], ['<C-j>'], ['<C-n>']];
   override preservesDesiredColumn = true;
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
@@ -328,7 +328,7 @@ class MoveDown extends BaseMovement {
 
 @RegisterAction
 class MoveUp extends BaseMovement {
-  keys = [['k'], ['<up>'], ['<C-p>']];
+  keys = [['<up>'], ['<C-p>']];
   override preservesDesiredColumn = true;
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
@@ -701,7 +701,7 @@ async function ensureEditorIsActive(document: vscode.TextDocument) {
 
 @RegisterAction
 class MoveLeft extends BaseMovement {
-  keys = [['h'], ['<left>'], ['<BS>'], ['<C-BS>'], ['<S-BS>']];
+  keys = [['<left>'], ['<BS>'], ['<C-BS>'], ['<S-BS>']];
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     const getLeftWhile = (p: Position): Position => {
@@ -732,7 +732,7 @@ class MoveLeft extends BaseMovement {
 
 @RegisterAction
 class MoveRight extends BaseMovement {
-  keys = [['l'], ['<right>'], [' ']];
+  keys = [['<right>'], [' ']];
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     const getRightWhile = (p: Position): Position => {
@@ -1496,7 +1496,7 @@ export class MoveFullWordBegin extends BaseMovement {
 
 @RegisterAction
 class MoveWordEnd extends BaseMovement {
-  keys = ['e'];
+  keys = []; // TODO: find replacement?
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     return position.nextWordEnd(vimState.document);

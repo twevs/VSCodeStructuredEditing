@@ -100,7 +100,7 @@ export abstract class BaseOperator extends BaseAction {
 export class DeleteOperator extends BaseOperator {
   public override name = 'delete_op';
   public keys = ['d'];
-  public modes = [Mode.Normal, Mode.Visual, Mode.VisualLine];
+  public modes = [Mode.Visual, Mode.VisualLine];
 
   public async run(vimState: VimState, start: Position, end: Position): Promise<void> {
     // TODO: this is off by one when character-wise and not including last EOL

@@ -1347,7 +1347,7 @@ class CommandTabPrevious extends BaseCommand {
 @RegisterAction
 export class ActionDeleteChar extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['x'];
+  keys = []; // TODO: find replacement?
   override name = 'delete_char';
   override createsUndoPoint = true;
 
@@ -2202,7 +2202,7 @@ class ActionChangeLineVisualBlockMode extends BaseCommand {
 @RegisterAction
 class ActionChangeChar extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['s'];
+  keys = []; // TODO: find replacement?
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     await new operator.ChangeOperator(this.multicursorIndex).run(
@@ -2711,7 +2711,7 @@ function getEntireNodeRange(range: vscode.Range): vscode.Range
 @RegisterAction
 class DeleteAstNode extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 'd'];
+  keys = ['x'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2743,7 +2743,7 @@ class DeleteAstNode extends BaseCommand {
 @RegisterAction
 class ReplaceParentAstNode extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 'r'];
+  keys = ['s'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2751,7 +2751,7 @@ class ReplaceParentAstNode extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    var parentAstNode = await getParentAstNode(vimState.currentAstNode);
+    var parentAstNode = await getParentAstNode(vimState.currentAstNode, vimState);
     if (parentAstNode !== null)
     {
       const converter = globalThis.clangContext.client.protocol2CodeConverter;
@@ -2773,7 +2773,7 @@ class ReplaceParentAstNode extends BaseCommand {
 @RegisterAction
 class ExtractToParentLevel extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 'e'];
+  keys = ['e'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2782,7 +2782,7 @@ class ExtractToParentLevel extends BaseCommand {
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     const currentNode = vimState.currentAstNode;
-    var parent = await getParentAstNode(currentNode);
+    var parent = await getParentAstNode(currentNode, vimState);
     // TODO: proper error handling.
     if (!parent)
     {
@@ -2790,7 +2790,7 @@ class ExtractToParentLevel extends BaseCommand {
     }
     if (parent.kind == "ExprWithCleanups")
     {
-      parent = await getParentAstNode(parent);
+      parent = await getParentAstNode(parent, vimState);
       if (!parent)
       {
         return;
@@ -2849,7 +2849,7 @@ function getCursorForNode(node: ASTNode): Cursor
 @RegisterAction
 class ExpandToParentNode extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 'p'];
+  keys = ['k'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2857,10 +2857,11 @@ class ExpandToParentNode extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    const parentNode = await getParentAstNode(vimState.currentAstNode);
+    const parentNode = await getParentAstNode(vimState.currentAstNode, vimState);
     if (parentNode)
     {
       vimState.cursors[0] = getCursorForNode(parentNode);
+      vimState.currentAstNode = parentNode;
     }
   }
 }
@@ -2868,7 +2869,7 @@ class ExpandToParentNode extends BaseCommand {
 @RegisterAction
 class ContractToFirstChildNode extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 'c'];
+  keys = ['j'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2878,7 +2879,9 @@ class ContractToFirstChildNode extends BaseCommand {
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     if (vimState.currentAstNode?.children)
     {
-      vimState.cursors[0] = getCursorForNode(vimState.currentAstNode.children[0]);
+      const newNode = vimState.currentAstNode.children[0];
+      vimState.cursors[0] = getCursorForNode(newNode);
+      vimState.currentAstNode = newNode;
     }
   }
 }
@@ -2886,7 +2889,7 @@ class ContractToFirstChildNode extends BaseCommand {
 @RegisterAction
 class GetPreviousSibling extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 'a'];
+  keys = ['h'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2894,7 +2897,7 @@ class GetPreviousSibling extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    const parentNode = await getParentAstNode(vimState.currentAstNode, true);
+    const parentNode = await getParentAstNode(vimState.currentAstNode, vimState, true);
     if (parentNode)
     {
       const numChildren = parentNode.children!.length;
@@ -2907,7 +2910,9 @@ class GetPreviousSibling extends BaseCommand {
           break;
         }
       }
-      vimState.cursors[0] = getCursorForNode(parentNode.children![i]);
+      const newNode = parentNode.children![i];
+      vimState.cursors[0] = getCursorForNode(newNode);
+      vimState.currentAstNode = newNode;
     }
   }
 }
@@ -2915,7 +2920,7 @@ class GetPreviousSibling extends BaseCommand {
 @RegisterAction
 class GetNextSibling extends BaseCommand {
   modes = [Mode.Normal];
-  keys = ['Q', 's'];
+  keys = ['l'];
 
   override createsUndoPoint = true;
   override runsOnceForEveryCursor() {
@@ -2923,7 +2928,7 @@ class GetNextSibling extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    const parentNode = await getParentAstNode(vimState.currentAstNode, true);
+    const parentNode = await getParentAstNode(vimState.currentAstNode, vimState, true);
     if (parentNode)
     {
       const numChildren = parentNode.children!.length;
@@ -2936,7 +2941,9 @@ class GetNextSibling extends BaseCommand {
           break;
         }
       }
-      vimState.cursors[0] = getCursorForNode(parentNode.children![i]);
+      const newNode = parentNode.children![i];
+      vimState.cursors[0] = getCursorForNode(newNode);
+      vimState.currentAstNode = newNode;
     }
   }
 }
