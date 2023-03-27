@@ -699,6 +699,11 @@ export class ModeHandler implements vscode.Disposable, IModeHandler {
     // There is unfortunately no key release event to bind to, which means that there doesn't really seem to be an easy way to
     // avoid sending clangd a lot of wasteful requests during repeat key presses. To try to mitigate this, we use promise
     // caching to have it only handle one request at a time and only chain the most recent relevant request.
+
+    // TODO: move away from highlighting the AST node under the cursor to highlighting the AST node the user wants to navigate to.
+    // This information has to come from the action itself. In that case, highlightAstNode() would no longer set the current AST
+    // node, instead the current AST node would be set by the navigation action and highlightAstNode()'s job would simply be to
+    // highlight it.
     if (this.vimState.currentClangdPromise)
     {
       this.vimState.cancelPendingClangdPromise();

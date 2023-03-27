@@ -33,23 +33,11 @@ const decorationType = vscode.window.createTextEditorDecorationType({
 //   on "&" to point to the whole "&message" node.
 //
 // NOTE: this has the side effect of setting vimState.currentAstNode.
-export const highlightAstNode = async (vimState: VimState, item: ASTNode): Promise<void> => {
-    // "Var" covers variable initializations, which are coextensive with the scope of their parent Decl.
-    if (item.kind == "DeclRef" || item.kind == "UnresolvedLookup" || item.kind == "Var")
+export const highlightAstNode = async (vimState: VimState): Promise<void> => {
+    var item = vimState.currentAstNode;
+    if (!item)
     {
-      const parent = await getParentAstNode(item);
-      // TODO: proper error handling.
-      if (parent)
-      {
-        if ((parent.kind == "Call" && areEqual(parent.children![0], item))
-        || parent.kind == "UnaryOperator"
-        || parent.kind == "CXXOperatorCall"
-        || (parent.kind == "BinaryOperator" && parent.detail == "=")
-        || parent.kind == "Decl")
-        {
-          item = parent;
-        }
-      }
+      return;
     }
 
     // TODO: figure out whether there is a simpler way to convert a vscodelc.Positition to a vscode.Position.
@@ -63,8 +51,6 @@ export const highlightAstNode = async (vimState: VimState, item: ASTNode): Promi
 
     // Apply the decoration style to the range
     vscode.window.activeTextEditor!.setDecorations(decorationType, [astDecoration]);
-
-    vimState.currentAstNode = item;
 }
 
 export const highlightAstNodeUnderCursor = async (vimState: VimState): Promise<void> => {
@@ -107,7 +93,11 @@ export const highlightAstNodeUnderCursor = async (vimState: VimState): Promise<v
       + selectionRange.end.character
       + ')');
   } else {
-    await highlightAstNode(vimState, item);
+    if (!vimState.currentAstNode)
+    {
+      vimState.currentAstNode = item;
+    }
+    await highlightAstNode(vimState);
   }
 };
 
@@ -132,38 +122,38 @@ export function areEqual(a: ASTNode, b: ASTNode): boolean
 //
 // getParentFromAncestor() will return the whole for loop as the parent of "sum += i".
 // For the meaning of forceCompoundParent, see the note above getParentAstNode().
-const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescendant: ASTNode, forceCompoundParent: boolean = false): Promise<ASTNode | null> =>
+const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescendant: ASTNode, vimState: VimState, forceCompoundParent: boolean = false): Promise<ASTNode | null> =>
 {
   // vscode.window.showInformationMessage('getParentAstNode() called on ' + potentialAncestor?.kind + ' (' + potentialAncestor?.range?.start.line + ':' + potentialAncestor?.range?.start.character +
   // ' -> ' + potentialAncestor?.range?.end.line + ':' + potentialAncestor?.range?.end.character + ') and ' + potentialDescendant?.kind + ' (' + potentialDescendant?.range?.start.line + ':' + potentialDescendant?.range?.start.character +
   // ' -> ' + potentialDescendant?.range?.end.line + ':' + potentialDescendant?.range?.end.character + ')');
   if (!potentialAncestor || !potentialAncestor.children || !potentialDescendant)
   {
-    myLog.appendLine('getParentFromAncestor() called with null argument (probably potentialAncestor.children)');
+    // myLog.appendLine('getParentFromAncestor() called with null argument (probably potentialAncestor.children)');
 
     return null;
   }
   else
   {
-    myLog.appendLine('getParentFromAncestor() called with potentialAncestor == '
-    + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character + ' -> '
-    + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ') and potentialDescendant == '
-    + potentialDescendant.kind + ' (' + potentialDescendant.range?.start.line + ':' + potentialDescendant.range?.start.character + ' -> '
-    + potentialDescendant.range?.end.line + ':' + potentialDescendant.range?.end.character + ')');
+    // myLog.appendLine('getParentFromAncestor() called with potentialAncestor == '
+    // + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character + ' -> '
+    // + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ') and potentialDescendant == '
+    // + potentialDescendant.kind + ' (' + potentialDescendant.range?.start.line + ':' + potentialDescendant.range?.start.character + ' -> '
+    // + potentialDescendant.range?.end.line + ':' + potentialDescendant.range?.end.character + ')');
 
     for (var child of potentialAncestor.children)
     {
-      myLog.appendLine('looking at potential ancestor\'s child: ' + child.kind + ' (' + child.range?.start.line + ':' + child.range?.start.character + ' -> '
-      + child.range?.end.line + ':' + child.range?.end.character + ')');
+      // myLog.appendLine('looking at potential ancestor\'s child: ' + child.kind + ' (' + child.range?.start.line + ':' + child.range?.start.character + ' -> '
+      // + child.range?.end.line + ':' + child.range?.end.character + ')');
 
       // vscode.window.showInformationMessage('Testing child ' + child.kind + ' at ' + child.range?.start.line + ':' + child.range?.start.character + '');
       if (areEqual(child, potentialDescendant))
       {
-        myLog.appendLine('it\'s a match');
+        // myLog.appendLine('it\'s a match');
 
         if (!forceCompoundParent && potentialAncestor.kind == "Compound" && potentialDescendant.kind != "Compound")
         {
-          const grandParent = await getParentAstNode(potentialAncestor);
+          const grandParent = await getParentAstNode(potentialAncestor, vimState);
           // TODO: proper error handling.
           if (grandParent && grandParent.kind != "Compound")
           {
@@ -178,36 +168,36 @@ const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescend
       }
       else
       {
-        myLog.appendLine('it\'s not a match, looking in children\'s children');
+        // myLog.appendLine('it\'s not a match, looking in children\'s children');
 
-        const childSearch = await getParentFromAncestor(child, potentialDescendant, forceCompoundParent);
+        const childSearch = await getParentFromAncestor(child, potentialDescendant, vimState, forceCompoundParent);
         if (childSearch)
         {
-          myLog.appendLine('child search succeeded: ' + childSearch.kind + ' (' + childSearch.range?.start.line + ':' + childSearch.range?.start.character + ' -> '
-          + childSearch.range?.end.line + ':' + childSearch.range?.end.character + ')');
+          // myLog.appendLine('child search succeeded: ' + childSearch.kind + ' (' + childSearch.range?.start.line + ':' + childSearch.range?.start.character + ' -> '
+          // + childSearch.range?.end.line + ':' + childSearch.range?.end.character + ')');
 
           return childSearch;
         }
         else
         {
-          myLog.appendLine('child search failed');
+          // myLog.appendLine('child search failed');
         }
       }
     }
   }
 
-  myLog.appendLine('failed to find parent, returning null with potentialAncestor == '
-  + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character + ' -> '
-  + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ') and potentialDescendant == '
-  + potentialDescendant.kind + ' (' + potentialDescendant.range?.start.line + ':' + potentialDescendant.range?.start.character + ' -> '
-  + potentialDescendant.range?.end.line + ':' + potentialDescendant.range?.end.character + ')');
+  // myLog.appendLine('failed to find parent, returning null with potentialAncestor == '
+  // + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character + ' -> '
+  // + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ') and potentialDescendant == '
+  // + potentialDescendant.kind + ' (' + potentialDescendant.range?.start.line + ':' + potentialDescendant.range?.start.character + ' -> '
+  // + potentialDescendant.range?.end.line + ':' + potentialDescendant.range?.end.character + ')');
   return null;
 }
 
 // forceCompoundParent is relevant if node's parent is a Compound, in which case
 //  - if true, the function always returns that Compound parent;
 //  - if false and Compound's own parent is not a Compound, it returns the latter (For, While, Function, etc).
-export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent: boolean = false): Promise<ASTNode | null> =>
+export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, forceCompoundParent: boolean = false): Promise<ASTNode | null> =>
 {
   // vscode.window.showInformationMessage('getParentAstNode() called on ' + node?.kind + ' (' + node?.range?.start.line + ':' + node?.range?.start.character +
   // ' -> ' + node?.range?.end.line + ':' + node?.range?.end.character + ')');
@@ -215,6 +205,17 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
   if (node === null)
   {
     return null;
+  }
+
+  if (vimState.lastParent && vimState.lastParent.children)
+  {
+    for (const child of vimState.lastParent.children)
+    {
+      if (areEqual(child, node))
+      {
+        return vimState.lastParent;
+      }
+    }
   }
 
   // Keep going backwards until we hit node's direct parent or a node whose descendants include that parent.
@@ -231,7 +232,7 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
 
   while (parentAstNode === null)
   {
-    myLog.appendLine('searching for parent at ' + currentLine + ':' + currentCharacter);
+    // myLog.appendLine('searching for parent at ' + currentLine + ':' + currentCharacter);
 
     // Work backwards until we get a character that can be used in an AST request.
 
@@ -246,7 +247,7 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
       // TODO: fix this causing an infinite loop when trying to get the parent of lines near the top of the file that match the criteria.
       if (line.isEmptyOrWhitespace || (firstCharInLine == '/' && secondCharInLine == '/') || firstCharInLine == '#')
       {
-        myLog.appendLine('skipping line');
+        // myLog.appendLine('skipping line');
 
         currentPosition = currentPosition.getUp().getLineEnd();
         currentLine = currentPosition.line;
@@ -258,7 +259,8 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
             textDocument: c2p.asTextDocumentIdentifier(editor!.document),
             range: null,
           });
-          vscode.window.showInformationMessage('returning ' + candidateAncestor?.kind);
+          // vscode.window.showInformationMessage('returning ' + candidateAncestor?.kind);
+          vimState.lastParent = candidateAncestor;
           return candidateAncestor;
         }
       }
@@ -270,12 +272,12 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
 
     // Now, try to skip character ranges.
     var previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
-    myLog.appendLine('character is: ' + previousCharacter);
+    // myLog.appendLine('character is: ' + previousCharacter);
 
     // TODO: verify whether some of these checks can be jettisoned.
     while (previousCharacter == ' ' || previousCharacter == ';' || previousCharacter == '\n' || previousCharacter == '\r\n' || previousCharacter == '\t')
     {
-      myLog.appendLine('skipping character');
+      // myLog.appendLine('skipping character');
 
       currentPosition = currentPosition.getLeftThroughLineBreaks();
       while (currentPosition.character == document.lineAt(currentPosition.line).text.length)
@@ -286,7 +288,7 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
       currentCharacter = currentPosition.character;
       previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
 
-      myLog.appendLine('skipped to ' + currentLine + ':' + currentCharacter + ' == ' + previousCharacter);
+      // myLog.appendLine('skipped to ' + currentLine + ':' + currentCharacter + ' == ' + previousCharacter);
     }
 
     // Now that we have a valid character, make the AST request.
@@ -300,7 +302,7 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
     // If there isn't an AST node for the character, we're probably in a comment or preprocessor directive.
     if (candidateAncestor)
     {
-      myLog.appendLine('AST request succeeded');
+      // myLog.appendLine('AST request succeeded');
 
       // First, we have to check that this candidate ancestor is not in fact a *child* of node. This is necessary
       // because in the Clang AST, the namespace is a child of the node it qualifies, eg in
@@ -322,20 +324,21 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
       // Now that we have a candidate ancestor, recurse through its descendants. Either:
       // - we find node, in which case we can return its parent;
       // - we don't, in which case we continue the search backwards from the beginning of the candidate parent's range.
-      const candidateParent = potentialAncestorIsActuallyChild ? null : await getParentFromAncestor(candidateAncestor, node, forceCompoundParent);
+      const candidateParent = potentialAncestorIsActuallyChild ? null : await getParentFromAncestor(candidateAncestor, node, vimState, forceCompoundParent);
       if (candidateParent)
       {
-        myLog.appendLine('found candidateParent: ' + candidateParent.kind + ' (' + candidateParent.range?.start.line + ':' + candidateParent.range?.start.character + ' -> '
-        + candidateParent.range?.end.line + ':' + candidateParent.range?.end.character + ')');
+        // myLog.appendLine('found candidateParent: ' + candidateParent.kind + ' (' + candidateParent.range?.start.line + ':' + candidateParent.range?.start.character + ' -> '
+        // + candidateParent.range?.end.line + ':' + candidateParent.range?.end.character + ')');
 
+        vimState.lastParent = candidateParent;
         return candidateParent;
       }
       else
       {
-        myLog.appendLine('failed to find candidateParent');
+        // myLog.appendLine('failed to find candidateParent');
       }
 
-      myLog.appendLine('pushing back currentPosition to start of node range');
+      // myLog.appendLine('pushing back currentPosition to start of node range');
 
       // This fixes some issues with GET_X_LPARAM() and GET_Y_LPARAM().
       currentPosition = candidateAncestor.range ?
@@ -344,16 +347,18 @@ export const getParentAstNode = async(node: ASTNode | null, forceCompoundParent:
     }
     else
     {
-      myLog.appendLine('AST request failed');
+      // myLog.appendLine('AST request failed');
     }
 
-    myLog.appendLine('pushing back currentPosition');
+    // myLog.appendLine('pushing back currentPosition');
 
     currentPosition = currentPosition.getLeftThroughLineBreaks();
     currentLine = currentPosition.line;
     currentCharacter = currentPosition.character;
 
-    myLog.appendLine('going back to ' + currentLine + ':' + currentCharacter);
+    // myLog.appendLine('going back to ' + currentLine + ':' + currentCharacter);
   }
+
+  vimState.lastParent = parentAstNode;
   return parentAstNode;
 }
