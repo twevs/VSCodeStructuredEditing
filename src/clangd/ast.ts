@@ -13,7 +13,7 @@ export function activate(context: ClangdContext) {
 // The wire format: we send a position, and get back a tree of ASTNode.
 export interface ASTParams {
   textDocument: vscodelc.TextDocumentIdentifier;
-  range: vscodelc.Range;
+  range: vscodelc.Range | null;
 }
 export interface ASTNode {
   role: string;    // e.g. expression
