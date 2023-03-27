@@ -2751,22 +2751,37 @@ class ReplaceParentAstNode extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
-    var parentAstNode = await getParentAstNode(vimState.currentAstNode, vimState);
-    if (parentAstNode !== null)
+    const currentNode = vimState.currentAstNode;
+    if (!currentNode)
     {
-      const converter = globalThis.clangContext.client.protocol2CodeConverter;
-      // TODO:
-      // - remove scope braces and unindent when appropriate to do so;
-      // - highlight parent node;
-      // - go over all usages of the ? and ! operators and test all of these code paths for robustness.
-      const astNodeRange = getEntireNodeRange(getRangeWithSemiColon(converter.asRange(vimState.currentAstNode!.range!)));
-      const astNodeText = vscode.window.activeTextEditor!.document.getText(astNodeRange);
-      vimState.recordedState.transformer.addTransformation({
-        type: 'replaceText',
-        range: converter.asRange(parentAstNode!.range!),
-        text: astNodeText
-      });
+      return;
     }
+    var parent = await getParentAstNode(currentNode, vimState);
+    if (!parent)
+    {
+      return;
+    }
+    if (parent!.kind === "Compound")
+    {
+      const grandParent = await getParentAstNode(parent, vimState);
+      if (grandParent?.kind !== "Compound")
+      {
+        parent = grandParent ?? parent;
+      }
+    }
+
+    const converter = globalThis.clangContext.client.protocol2CodeConverter;
+    // TODO:
+    // - remove scope braces and unindent when appropriate to do so;
+    // - highlight parent node;
+    // - go over all usages of the ? and ! operators and test all of these code paths for robustness.
+    const astNodeRange = getEntireNodeRange(getRangeWithSemiColon(converter.asRange(currentNode.range!)));
+    const astNodeText = vscode.window.activeTextEditor!.document.getText(astNodeRange);
+    vimState.recordedState.transformer.addTransformation({
+      type: 'replaceText',
+      range: converter.asRange(parent.range!),
+      text: astNodeText
+    });
   }
 }
 
@@ -2782,23 +2797,26 @@ class ExtractToParentLevel extends BaseCommand {
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     const currentNode = vimState.currentAstNode;
+    if (!currentNode)
+    {
+      return;
+    }
     var parent = await getParentAstNode(currentNode, vimState);
-    // TODO: proper error handling.
     if (!parent)
     {
       return;
     }
-    if (parent.kind == "ExprWithCleanups")
+    if (parent!.kind === "Compound")
     {
-      parent = await getParentAstNode(parent, vimState);
-      if (!parent)
+      const grandParent = await getParentAstNode(parent, vimState);
+      if (grandParent?.kind !== "Compound")
       {
-        return;
+        parent = grandParent ?? parent;
       }
     }
 
     const converter = globalThis.clangContext.client.protocol2CodeConverter;
-    var astNodeRange = globalThis.clangContext.client.protocol2CodeConverter.asRange(vimState.currentAstNode!.range!);
+    var astNodeRange = globalThis.clangContext.client.protocol2CodeConverter.asRange(currentNode.range!);
     astNodeRange = getRangeWithSemiColon(astNodeRange);
     var entireNodeRange = getEntireNodeRange(astNodeRange);
 
@@ -2830,8 +2848,8 @@ function getCursorForNode(node: ASTNode): Cursor
 {
   const converter = globalThis.clangContext.client.protocol2CodeConverter;
   var newPosition = converter.asPosition(node.range!.start);
-  const document = vscode.window.activeTextEditor!.document;
 
+  const document = vscode.window.activeTextEditor!.document;
   if (node.kind == "Decl"
   && node.children && node.children[0].kind == "Var"
   && node.children[0].children)
@@ -2862,8 +2880,16 @@ class ExpandToParentNode extends BaseCommand {
     {
       vimState.cursors[0] = getCursorForNode(parentNode);
       vimState.currentAstNode = parentNode;
+      myLog.appendLine('going to parent, setting currentAstNode to ' + vimState.currentAstNode.kind);
     }
   }
+}
+
+const myLog = vscode.window.createOutputChannel('Node log');
+
+function getChildIfImplicitCast(node: ASTNode): ASTNode
+{
+  return node.kind !== "ImplicitCast" ? node : node.children![0];
 }
 
 @RegisterAction
@@ -2879,9 +2905,13 @@ class ContractToFirstChildNode extends BaseCommand {
   public override async exec(position: Position, vimState: VimState): Promise<void> {
     if (vimState.currentAstNode?.children)
     {
-      const newNode = vimState.currentAstNode.children[0];
+      vimState.currentParent = vimState.currentAstNode;
+      const newNode = getChildIfImplicitCast(vimState.currentAstNode.children[0]);
       vimState.cursors[0] = getCursorForNode(newNode);
       vimState.currentAstNode = newNode;
+      // myLog.appendLine('newNode == ' + newNode.kind + ' (' + newNode.range?.start.line + ':' + newNode.range?.start.character + ' -> '
+      // + newNode.range?.end.line + ':' + newNode.range?.end.character + ')');
+      myLog.appendLine('going to child, setting lastParent to ' + vimState.currentParent.kind + ' and currentAstNode to ' + vimState.currentAstNode.kind);
     }
   }
 }
@@ -2910,9 +2940,12 @@ class GetPreviousSibling extends BaseCommand {
           break;
         }
       }
-      const newNode = parentNode.children![i];
+      const newNode = getChildIfImplicitCast(parentNode.children![i]);
       vimState.cursors[0] = getCursorForNode(newNode);
       vimState.currentAstNode = newNode;
+      // myLog.appendLine('newNode == ' + newNode.kind + ' (' + newNode.range?.start.line + ':' + newNode.range?.start.character + ' -> '
+      // + newNode.range?.end.line + ':' + newNode.range?.end.character + ')');
+      myLog.appendLine('going to previous sibling, setting currentAstNode to ' + vimState.currentAstNode.kind);
     }
   }
 }
@@ -2928,6 +2961,10 @@ class GetNextSibling extends BaseCommand {
   }
 
   public override async exec(position: Position, vimState: VimState): Promise<void> {
+    if (!vimState.currentAstNode)
+    {
+
+    }
     const parentNode = await getParentAstNode(vimState.currentAstNode, vimState, true);
     if (parentNode)
     {
@@ -2941,9 +2978,12 @@ class GetNextSibling extends BaseCommand {
           break;
         }
       }
-      const newNode = parentNode.children![i];
+      const newNode = getChildIfImplicitCast(parentNode.children![i]);
       vimState.cursors[0] = getCursorForNode(newNode);
       vimState.currentAstNode = newNode;
+      // myLog.appendLine('newNode == ' + newNode.kind + ' (' + newNode.range?.start.line + ':' + newNode.range?.start.character + ' -> '
+      // + newNode.range?.end.line + ':' + newNode.range?.end.character + ')');
+      myLog.appendLine('going to next sibling, setting currentAstNode to ' + vimState.currentAstNode.kind);
     }
   }
 }

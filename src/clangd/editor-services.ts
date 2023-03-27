@@ -53,60 +53,78 @@ export const highlightAstNode = async (vimState: VimState): Promise<void> => {
     vscode.window.activeTextEditor!.setDecorations(decorationType, [astDecoration]);
 }
 
+var lastVersion = -1;
+const loggy = vscode.window.createOutputChannel('loggy');
+
 export const highlightAstNodeUnderCursor = async (vimState: VimState): Promise<void> => {
   vimState.cancelPendingClangdPromise = function() {
     reject("Cancelled");
   };
 
-  const editor = vscode.window.activeTextEditor;
-  const cursorPosition = editor!.selection.active;
-
-  // Don't bother even sending a request if we are on an empty line, in a comment or preprocessor definition, or
-  // on a character that cannot yield a valid request.
-  const line = editor!.document.lineAt(cursorPosition.line);
-  const firstNonWhiteSpaceIndex = line.firstNonWhitespaceCharacterIndex;
-  const firstCharInLine = line.text.charAt(firstNonWhiteSpaceIndex);
-  const secondCharInLine = (firstNonWhiteSpaceIndex != line.text.length ? line.text.charAt(firstNonWhiteSpaceIndex + 1) : '');
-  const charUnderCursor = line.text.charAt(cursorPosition.character);
-  if (line.isEmptyOrWhitespace
-    || (firstCharInLine == '/' && secondCharInLine == '/') || firstCharInLine == '#'
-    || charUnderCursor == ' ' || charUnderCursor == ';' || charUnderCursor == '\n' || charUnderCursor == '\r\n' || charUnderCursor == '\t')
+  if (lastVersion !== vimState.document.version)
   {
-    return;
+    lastVersion = vimState.document.version;
+    loggy.appendLine('updating lastVersion to ' + lastVersion);
+    vimState.currentAstNode = null;
+    vimState.currentParent = null;
   }
 
-  const converter = clangContext.client.code2ProtocolConverter;
-  var item = await clangContext.client.sendRequest(ASTRequestType, {
-    textDocument: converter.asTextDocumentIdentifier(editor!.document),
-    range: converter.asRange(new vscode.Range(cursorPosition, cursorPosition.getRight())),
-  });
-  if (!item || !item.range) {
-    const selectionRange = converter.asRange(editor!.selection);
-    vscode.window.showInformationMessage(
-      'No AST node at selection ('
-      + selectionRange.start.line
-      + ':'
-      + selectionRange.start.character
-      + ' -> '
-      + selectionRange.end.line
-      + ':'
-      + selectionRange.end.character
-      + ')');
-  } else {
-    if (!vimState.currentAstNode)
+  if (!vimState.currentAstNode || !vimState.currentParent)
+  {
+    const editor = vscode.window.activeTextEditor;
+    const cursorPosition = editor!.selection.active;
+
+    // Don't bother even sending a request if we are on an empty line, in a comment or preprocessor definition, or
+    // on a character that cannot yield a valid request.
+    const line = editor!.document.lineAt(cursorPosition.line);
+    const firstNonWhiteSpaceIndex = line.firstNonWhitespaceCharacterIndex;
+    const firstCharInLine = line.text.charAt(firstNonWhiteSpaceIndex);
+    const secondCharInLine = (firstNonWhiteSpaceIndex != line.text.length ? line.text.charAt(firstNonWhiteSpaceIndex + 1) : '');
+    const charUnderCursor = line.text.charAt(cursorPosition.character);
+    if (line.isEmptyOrWhitespace
+      || (firstCharInLine == '/' && secondCharInLine == '/') || firstCharInLine == '#'
+      || charUnderCursor == ' ' || charUnderCursor == ';' || charUnderCursor == '\n' || charUnderCursor == '\r\n' || charUnderCursor == '\t')
     {
-      vimState.currentAstNode = item;
+      return;
     }
-    await highlightAstNode(vimState);
+
+    const converter = clangContext.client.code2ProtocolConverter;
+    var item = await clangContext.client.sendRequest(ASTRequestType, {
+      textDocument: converter.asTextDocumentIdentifier(editor!.document),
+      range: converter.asRange(new vscode.Range(cursorPosition, cursorPosition.getRight())),
+    });
+    if (!item || !item.range) {
+      const selectionRange = converter.asRange(editor!.selection);
+      vscode.window.showInformationMessage(
+        'No AST node at selection ('
+        + selectionRange.start.line
+        + ':'
+        + selectionRange.start.character
+        + ' -> '
+        + selectionRange.end.line
+        + ':'
+        + selectionRange.end.character
+        + ')');
+
+        return;
+    } else {
+      vimState.currentAstNode = item;
+      vimState.currentParent = await getParentAstNode(vimState.currentAstNode, vimState);
+    }
   }
+
+  await highlightAstNode(vimState);
 };
 
 export function areEqual(a: ASTNode, b: ASTNode): boolean
 {
-  return a.range?.start.line == b.range?.start.line
+  return (a.range?.start.line == b.range?.start.line
   && a.range?.start.character == b.range?.start.character
   && a.range?.end.line == b.range?.end.line
-  && a.range?.end.character == b.range?.end.character;
+  && a.range?.end.character == b.range?.end.character
+  && a.kind == b.kind)
+  || (a.kind == "ImplicitCast" && areEqual(a.children![0], b))
+  || (b.kind == "ImplicitCast" && areEqual(b.children![0], a));
 }
 
 // If potentialAncestor is potentialDescendant's direct parent or counts potentialDescendant's
@@ -150,18 +168,6 @@ const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescend
       if (areEqual(child, potentialDescendant))
       {
         // myLog.appendLine('it\'s a match');
-
-        if (!forceCompoundParent && potentialAncestor.kind == "Compound" && potentialDescendant.kind != "Compound")
-        {
-          const grandParent = await getParentAstNode(potentialAncestor, vimState);
-          // TODO: proper error handling.
-          if (grandParent && grandParent.kind != "Compound")
-          {
-            // vscode.window.showInformationMessage('It\'s a match, returning grandParent ' + grandParent.kind + ' (' + grandParent.range?.start.line + ':' + grandParent.range?.start.character
-            // + ' -> ' + grandParent.range?.end.line + ':' + grandParent.range?.end.character + ')');
-            return grandParent;
-          }
-        }
         // vscode.window.showInformationMessage('It\'s a match, returning potentialAncestor ' + potentialAncestor.kind + ' (' + potentialAncestor.range?.start.line + ':' + potentialAncestor.range?.start.character
         // + ' -> ' + potentialAncestor.range?.end.line + ':' + potentialAncestor.range?.end.character + ')');
         return potentialAncestor;
@@ -194,45 +200,64 @@ const getParentFromAncestor = async(potentialAncestor: ASTNode, potentialDescend
   return null;
 }
 
+export const getParentIfImplicitCast = async(node: ASTNode | null, vimState: VimState): Promise<ASTNode | null> =>
+{
+  myLog.appendLine('testing node: ' + node?.kind);
+  return node?.kind !== "ImplicitCast" ? node : await getParentAstNode(node, vimState);
+}
+
 // forceCompoundParent is relevant if node's parent is a Compound, in which case
 //  - if true, the function always returns that Compound parent;
 //  - if false and Compound's own parent is not a Compound, it returns the latter (For, While, Function, etc).
 export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, forceCompoundParent: boolean = false): Promise<ASTNode | null> =>
 {
-  // vscode.window.showInformationMessage('getParentAstNode() called on ' + node?.kind + ' (' + node?.range?.start.line + ':' + node?.range?.start.character +
-  // ' -> ' + node?.range?.end.line + ':' + node?.range?.end.character + ')');
+  myLog.appendLine('getParentAstNode() called on ' + node?.kind + ' (' + node?.range?.start.line + ':' + node?.range?.start.character +
+  ' -> ' + node?.range?.end.line + ':' + node?.range?.end.character + ')');
+  myLog.appendLine('vimState.lastParent == ' + vimState.currentParent?.kind);
+  myLog.appendLine('vimState.currentAstNode == ' + vimState.currentAstNode?.kind);
 
   if (node === null)
   {
     return null;
   }
 
-  if (vimState.lastParent && vimState.lastParent.children)
+  if (vimState.currentParent && vimState.currentParent.children)
   {
-    for (const child of vimState.lastParent.children)
+    for (const child of vimState.currentParent.children)
     {
       if (areEqual(child, node))
       {
-        return vimState.lastParent;
+        myLog.appendLine('found node among children of cached parent, returning lastParent');
+        return vimState.currentParent;
       }
     }
+  }
+
+  const c2p = clangContext.client.code2ProtocolConverter;
+  const p2c = clangContext.client.protocol2CodeConverter;
+  const editor = vscode.window.activeTextEditor;
+  const document = editor!.document;
+
+  if (node.kind === "Function")
+  {
+    vimState.currentParent = await clangContext.client.sendRequest(ASTRequestType, {
+      textDocument: c2p.asTextDocumentIdentifier(editor!.document),
+      range: null,
+    });
+    return vimState.currentParent;
   }
 
   // Keep going backwards until we hit node's direct parent or a node whose descendants include that parent.
   var parentAstNode: ASTNode | null = null;
   var nodeRange = node.range;
 
-  const c2p = clangContext.client.code2ProtocolConverter;
-  const p2c = clangContext.client.protocol2CodeConverter;
-  const editor = vscode.window.activeTextEditor;
-  const document = editor!.document;
   var currentPosition = p2c.asPosition(nodeRange!.start).getLeftThroughLineBreaks();
   var currentLine = currentPosition.line;
   var currentCharacter = currentPosition.character;
 
   while (parentAstNode === null)
   {
-    // myLog.appendLine('searching for parent at ' + currentLine + ':' + currentCharacter);
+    myLog.appendLine('searching for parent at ' + currentLine + ':' + currentCharacter);
 
     // Work backwards until we get a character that can be used in an AST request.
 
@@ -247,7 +272,7 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
       // TODO: fix this causing an infinite loop when trying to get the parent of lines near the top of the file that match the criteria.
       if (line.isEmptyOrWhitespace || (firstCharInLine == '/' && secondCharInLine == '/') || firstCharInLine == '#')
       {
-        // myLog.appendLine('skipping line');
+        myLog.appendLine('skipping line');
 
         currentPosition = currentPosition.getUp().getLineEnd();
         currentLine = currentPosition.line;
@@ -255,13 +280,11 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
 
         if (currentLine == 0)
         {
-          const candidateAncestor = await clangContext.client.sendRequest(ASTRequestType, {
+          vimState.currentParent = await clangContext.client.sendRequest(ASTRequestType, {
             textDocument: c2p.asTextDocumentIdentifier(editor!.document),
             range: null,
           });
-          // vscode.window.showInformationMessage('returning ' + candidateAncestor?.kind);
-          vimState.lastParent = candidateAncestor;
-          return candidateAncestor;
+          return vimState.currentParent;
         }
       }
       else
@@ -330,8 +353,8 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
         // myLog.appendLine('found candidateParent: ' + candidateParent.kind + ' (' + candidateParent.range?.start.line + ':' + candidateParent.range?.start.character + ' -> '
         // + candidateParent.range?.end.line + ':' + candidateParent.range?.end.character + ')');
 
-        vimState.lastParent = candidateParent;
-        return candidateParent;
+        vimState.currentParent = await getParentIfImplicitCast(candidateParent, vimState);
+        return vimState.currentParent;
       }
       else
       {
@@ -359,6 +382,6 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
     // myLog.appendLine('going back to ' + currentLine + ':' + currentCharacter);
   }
 
-  vimState.lastParent = parentAstNode;
-  return parentAstNode;
+  vimState.currentParent = await getParentIfImplicitCast(parentAstNode, vimState);
+  return vimState.currentParent;
 }
