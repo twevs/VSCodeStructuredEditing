@@ -251,9 +251,41 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
   var parentAstNode: ASTNode | null = null;
   var nodeRange = node.range;
 
-  var currentPosition = p2c.asPosition(nodeRange!.start).getLeftThroughLineBreaks();
+  var currentPosition = p2c.asPosition(nodeRange!.start);
   var currentLine = currentPosition.line;
   var currentCharacter = currentPosition.character;
+
+  // First, we have to make a special case for finding the Function parent of an unqualified function prototype.
+  if (currentCharacter === 0)
+  {
+    myLog.appendLine('special case for char == 0');
+    myLog.appendLine('current line === ' + currentLine);
+    const lineText = document.lineAt(currentLine).text;
+    myLog.appendLine('lineText: ' + lineText);
+    const potentialFunctionName = lineText.split(' ').at(1);
+
+    myLog.appendLine('potential function name === ' + potentialFunctionName);
+
+    if (potentialFunctionName)
+    {
+      const testCharacter = lineText.indexOf(potentialFunctionName);
+      const testAncestor = await clangContext.client.sendRequest(ASTRequestType, {
+        textDocument: c2p.asTextDocumentIdentifier(editor!.document),
+        range: c2p.asRange(new vscode.Range(currentLine, testCharacter, currentLine, testCharacter + 1)),
+      });
+      myLog.appendLine('potential function === ' + testAncestor?.kind);
+      if (testAncestor && testAncestor.kind === "Function")
+      {
+        myLog.appendLine('yay, found function');
+        vimState.currentParent = testAncestor;
+        return vimState.currentParent;
+      }
+    }
+
+    myLog.appendLine('fuck, failed to find function');
+  }
+
+  currentPosition = currentPosition.getLeftThroughLineBreaks();
 
   while (parentAstNode === null)
   {
@@ -261,7 +293,7 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
 
     // Work backwards until we get a character that can be used in an AST request.
 
-    // First, try to skip whole lines.
+    // Try to skip whole lines.
     while (true)
     {
       // If we're in a comment or preprocessor directive, skip the line.
@@ -295,12 +327,12 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
 
     // Now, try to skip character ranges.
     var previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
-    // myLog.appendLine('character is: ' + previousCharacter);
+    myLog.appendLine('character is: ' + previousCharacter);
 
     // TODO: verify whether some of these checks can be jettisoned.
     while (previousCharacter == ' ' || previousCharacter == ';' || previousCharacter == '\n' || previousCharacter == '\r\n' || previousCharacter == '\t')
     {
-      // myLog.appendLine('skipping character');
+      myLog.appendLine('skipping character');
 
       currentPosition = currentPosition.getLeftThroughLineBreaks();
       while (currentPosition.character == document.lineAt(currentPosition.line).text.length)
@@ -311,11 +343,11 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
       currentCharacter = currentPosition.character;
       previousCharacter = document.lineAt(currentLine).text.charAt(currentCharacter);
 
-      // myLog.appendLine('skipped to ' + currentLine + ':' + currentCharacter + ' == ' + previousCharacter);
+      myLog.appendLine('skipped to ' + currentLine + ':' + currentCharacter + ' == ' + previousCharacter);
     }
 
     // Now that we have a valid character, make the AST request.
-    var candidateAncestor = await clangContext.client.sendRequest(ASTRequestType, {
+    let candidateAncestor = await clangContext.client.sendRequest(ASTRequestType, {
       textDocument: c2p.asTextDocumentIdentifier(editor!.document),
       range: c2p.asRange(new vscode.Range(currentLine, currentCharacter, currentLine, currentCharacter + 1)),
     });
@@ -325,7 +357,7 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
     // If there isn't an AST node for the character, we're probably in a comment or preprocessor directive.
     if (candidateAncestor)
     {
-      // myLog.appendLine('AST request succeeded');
+      myLog.appendLine('AST request succeeded');
 
       // First, we have to check that this candidate ancestor is not in fact a *child* of node. This is necessary
       // because in the Clang AST, the namespace is a child of the node it qualifies, eg in
@@ -334,7 +366,7 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
       var potentialAncestorIsActuallyChild: boolean = false;
       if (node.children)
       {
-        for (var child of node.children)
+        for (const child of node.children)
         {
           if (areEqual(child, candidateAncestor))
           {
@@ -350,18 +382,18 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
       const candidateParent = potentialAncestorIsActuallyChild ? null : await getParentFromAncestor(candidateAncestor, node, vimState, forceCompoundParent);
       if (candidateParent)
       {
-        // myLog.appendLine('found candidateParent: ' + candidateParent.kind + ' (' + candidateParent.range?.start.line + ':' + candidateParent.range?.start.character + ' -> '
-        // + candidateParent.range?.end.line + ':' + candidateParent.range?.end.character + ')');
+        myLog.appendLine('found candidateParent: ' + candidateParent.kind + ' (' + candidateParent.range?.start.line + ':' + candidateParent.range?.start.character + ' -> '
+        + candidateParent.range?.end.line + ':' + candidateParent.range?.end.character + ')');
 
         vimState.currentParent = await getParentIfImplicitCast(candidateParent, vimState);
         return vimState.currentParent;
       }
       else
       {
-        // myLog.appendLine('failed to find candidateParent');
+        myLog.appendLine('failed to find candidateParent');
       }
 
-      // myLog.appendLine('pushing back currentPosition to start of node range');
+      myLog.appendLine('pushing back currentPosition to start of node range');
 
       // This fixes some issues with GET_X_LPARAM() and GET_Y_LPARAM().
       currentPosition = candidateAncestor.range ?
@@ -370,16 +402,27 @@ export const getParentAstNode = async(node: ASTNode | null, vimState: VimState, 
     }
     else
     {
-      // myLog.appendLine('AST request failed');
+      myLog.appendLine('AST request failed');
     }
 
-    // myLog.appendLine('pushing back currentPosition');
+    myLog.appendLine('pushing back currentPosition');
 
     currentPosition = currentPosition.getLeftThroughLineBreaks();
+    // Yet another special case to account for unqualified function prototypes requiring us to access the Function parent via the function name.
+    if (candidateAncestor?.kind === "FunctionProto" && candidateAncestor.range?.start.character === 0)
+    {
+      const startLine = candidateAncestor.range.start.line;
+      const lineText = document.lineAt(startLine).text;
+      const functionName = lineText.split(' ').at(1);
+      if (functionName)
+      {
+        currentPosition = new vscode.Position(startLine, lineText.indexOf(functionName));
+      }
+    }
     currentLine = currentPosition.line;
     currentCharacter = currentPosition.character;
 
-    // myLog.appendLine('going back to ' + currentLine + ':' + currentCharacter);
+    myLog.appendLine('going back to ' + currentLine + ':' + currentCharacter);
   }
 
   vimState.currentParent = await getParentIfImplicitCast(parentAstNode, vimState);
