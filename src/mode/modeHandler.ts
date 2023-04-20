@@ -702,18 +702,11 @@ export class ModeHandler implements vscode.Disposable, IModeHandler {
 
     // TODO: nullify currentAstNode and currentParent if the document is changed or ensure they are set according to wherever the
     // cursor is.
-    if (this.vimState.currentClangdPromise)
-    {
-      this.vimState.cancelPendingClangdPromise();
-      this.vimState.pendingClangdPromise = this.vimState.currentClangdPromise.then(
-        () =>
-        {
-          this.vimState.currentClangdPromise = highlightCurrentAstNode(this.vimState);
-        }
-      );
-    }
-    else
-    {
+    if (this.vimState.currentClangdPromise) {
+      this.vimState.pendingClangdPromise = this.vimState.currentClangdPromise.then(() => {
+        this.vimState.currentClangdPromise = highlightCurrentAstNode(this.vimState);
+      });
+    } else {
       this.vimState.currentClangdPromise = highlightCurrentAstNode(this.vimState);
     }
 

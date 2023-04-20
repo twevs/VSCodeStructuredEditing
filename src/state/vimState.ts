@@ -17,7 +17,7 @@ import { ExCommandLine, SearchCommandLine } from '../cmd_line/commandLine';
 import { ModeData } from '../mode/modeData';
 import { SearchDirection } from '../vimscript/pattern';
 import { globalState } from './globalState';
-import { ASTNode } from '../clangd/ast'
+import { ASTNode } from '../clangd/ast';
 
 interface IInputMethodSwitcher {
   switchInputMethod(prevMode: Mode, newMode: Mode): Promise<void>;
@@ -331,7 +331,6 @@ export class VimState implements vscode.Disposable {
 
   public currentClangdPromise: Promise<void> | null = null;
   public pendingClangdPromise: Promise<void> | null = null;
-  public cancelPendingClangdPromise: Function = new Function();
   public currentParent: ASTNode | null = null;
   public currentAstNode: ASTNode | null = null;
 
