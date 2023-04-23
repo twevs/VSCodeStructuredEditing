@@ -291,7 +291,7 @@ class MoveDown extends BaseMovement {
   override preservesDesiredColumn = true;
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
-    var newPosition;
+    let newPosition;
     if (
       vimState.currentMode === Mode.Insert &&
       this.keysPressed[0] === '<down>' &&
@@ -332,7 +332,7 @@ class MoveUp extends BaseMovement {
   override preservesDesiredColumn = true;
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
-    var newPosition;
+    let newPosition;
     if (
       vimState.currentMode === Mode.Insert &&
       this.keysPressed[0] === '<up>' &&
@@ -1496,7 +1496,7 @@ export class MoveFullWordBegin extends BaseMovement {
 
 @RegisterAction
 class MoveWordEnd extends BaseMovement {
-  keys = []; // TODO: find replacement?
+  keys = []; // NOTE (Thomas): deleted.
 
   public override async execAction(position: Position, vimState: VimState): Promise<Position> {
     return position.nextWordEnd(vimState.document);
